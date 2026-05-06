@@ -1,3 +1,10 @@
+//! Lowers sqlparser's API to tinyOLAP's types
+//! Only INSERT INTO and SELECT statements are supported by tinyOLAP. 
+//! Only these statements are lowered. 
+//! Everything else throws an exception.
+//! 
+//! NOTE: This module is mostly vibecoded.
+
 use crate::parser::ast::{AggFunc, CmpOp, Predicate, Projection, SelectExpr, SelectStmt};
 use crate::parser::{InsertStmt, Literal, ParseError, Statement};
 use sqlparser::ast as s;

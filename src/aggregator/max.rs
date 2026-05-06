@@ -5,6 +5,8 @@
 //!
 //! Bound is `Ord` (total order), which admits all integer types but not
 //! floats — floats only implement `PartialOrd` because of NaN.
+//! 
+//! Two implementations exist for Max: one for floats and one for ints.
 
 use std::marker::PhantomData;
 

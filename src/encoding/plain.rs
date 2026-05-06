@@ -2,6 +2,9 @@
 
 use crate::encoding::EncodingError;
 
+// stride is accepted but unused — Plain copies bytes verbatim.  The parameter
+// exists so all codec encode functions share the same signature, letting
+// Codec::encode dispatch them uniformly.
 pub fn encode(src: &[u8], stride: usize, out: &mut Vec<u8>) {
     debug_assert!(stride > 0, "stride must be non-zero");
     out.extend_from_slice(src);

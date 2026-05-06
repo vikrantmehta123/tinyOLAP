@@ -12,6 +12,13 @@ impl From<std::io::Error> for ExecutionError {
     }
 }
 
+// Pull-based execution model: the root drives the pipeline by calling
+// next_batch() repeatedly.
+//
+// Return convention:
+//   Some(Ok(batch))  — a batch is ready; call again for more
+//   Some(Err(e))     — fatal error; the pipeline should be abandoned
+//   None             — stream exhausted, no more data
 pub trait Processor {
     fn next_batch(&mut self) -> Option<Result<Batch, ExecutionError>>;
 }

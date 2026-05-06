@@ -1,5 +1,11 @@
+//! Interactive REPL shell for tinyOLAP.
+//!
+//! Wraps rustyline so we get readline-style editing (arrow keys, history). 
+
+
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+
 
 pub struct Repl {
     editor: DefaultEditor,

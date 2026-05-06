@@ -3,6 +3,8 @@
 //! Integer state uses `Min<T>` (`Ord`). Float state uses `MinFloat<T>`
 //! (`PartialOrd`, NaN-skipping — same convention as `MaxFloat`).
 //! State is `Option<T>`: `None` means no values seen yet.
+//! 
+//! Two structs exist for Min: for ints and floats. Similar to Max
 
 use std::marker::PhantomData;
 

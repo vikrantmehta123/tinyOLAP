@@ -1,3 +1,7 @@
+//! FullScan reads every part in the table and returns one Batch per part.
+//! Parts are read in parallel with rayon because each part is an independent
+//! directory — no shared mutable state, so no coordination is needed.
+
 use rayon::prelude::*;
 use std::path::PathBuf;
 

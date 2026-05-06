@@ -1,3 +1,6 @@
+//! Project Processor
+//! Selects columns from schema to read
+
 use super::{
     batch::Batch,
     processor::{ExecutionError, Processor},

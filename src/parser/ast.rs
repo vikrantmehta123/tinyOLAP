@@ -1,3 +1,8 @@
+//! tinyOLAP supports a small subset of SQL. 
+//! This file represents the types for that subset's AST.
+//! Only these types go in the subsequent query execution.
+
+
 #[derive(Debug, Clone)]
 pub enum Statement {
     Insert(InsertStmt),
@@ -38,7 +43,7 @@ pub enum SelectExpr {
 
 #[derive(Debug, Clone)]
 pub enum Projection {
-    All,
+    All, // SELECT *
     Exprs(Vec<SelectExpr>),
 }
 

@@ -1,3 +1,14 @@
+//! ScalarValue Type
+//! 
+//! This type is used in GROUP BY statements as Key
+//! GROUP BY is nothing but a key-value pairs.
+//! The key then becomes: Vec<ScalarValue>
+//! Each needs to be hashable.
+//! 
+//! TODO: Need to check if we can define a single DataType 
+//! and reuse it everywhere instead of defining data types in 
+//! multiple locations.
+
 use std::hash::{Hash, Hasher};
 use crate::storage::column_chunk::ColumnChunk;
 
