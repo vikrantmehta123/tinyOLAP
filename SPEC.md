@@ -13,7 +13,7 @@
 
 1. [X] **WHERE**: predicates (`=`, `<`, `>`, `<=`, `>=`, `!=`, `AND`, `OR`, `NOT`) evaluated column-by-column.
 2. [X] **Aggregations**: `SUM`, `AVG`, `COUNT`, `MIN`, `MAX` — with `GROUP BY`
-3. [] **Parallelism**: `rayon` across granules and parts.
+3. [] **Parallelism**: `rayon` across granules and parts and aggregations.
 4. [] **SIMD**: vectorized arithmetic and comparisons in the hot path via `std::simd`. Core learning goal — required.
 5. [X] **Sorted Parts**: each INSERT batch is written as an immutable "part" — a directory of per-column files, sorted by primary key. 
 6. [] **Support for HAVING clause**

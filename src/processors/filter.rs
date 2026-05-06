@@ -1,3 +1,11 @@
+//! Filter Processor
+//! 
+//! From a given batch, evaluate the predicate and select only
+//! the rows that pass the predicate. 
+//! 
+//! Evaluator produces a boolean mask. Filter uses that mask to copy
+//! the matching rows into a new chunk.
+
 use crate::evaluator::evaluate;
 use crate::parser::ast::Predicate;
 

@@ -1,3 +1,10 @@
+//! SQL parsing for tinyOLAP.
+//
+//! Tokenising and grammar is handled by sqlparser-rs. 
+//! The crate gives us an AST for free; we only need to
+//! lower its generic representation to the small subset tinyOLAP actually
+//! supports (see lower.rs).
+
 pub mod ast;
 mod lower;
 
@@ -11,7 +18,7 @@ pub enum ParseError {
     Syntax(String),
     Unsupported(String),
     Empty,
-    MultipleStatements,
+    MultipleStatements, // We don't execute multiple SQL statements. 
 }
 
 pub fn parse(sql: &str) -> Result<Statement, ParseError> {

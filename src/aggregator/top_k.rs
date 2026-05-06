@@ -1,3 +1,9 @@
+//! TopK Frequency Estimation Using Count-Min Sketch
+//! 
+//! Though this function exists, it is not yet integrated in
+//! tinyOLAP. This is considered a "good-to-have" and will 
+//! be integrated at a later stage.
+
 use ahash::RandomState;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -86,7 +92,8 @@ impl<T: Hash + Eq + Clone> TopK<T> {
         assert!(k > 0, "k must be > 0");
         Self {
             k,
-            sketch: CountMinSketch::new(5, 2048),
+            // d=5 and w=2048 are default, considered-good params for Count-Min sketch
+            sketch: CountMinSketch::new(5, 2048), 
             candidates: HashMap::with_capacity(k),
         }
     }

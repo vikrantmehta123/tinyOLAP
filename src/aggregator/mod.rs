@@ -1,9 +1,22 @@
+//! Aggregation module.
+//!
+//! Each aggregate is implemented in two layers:
+//!
+//! 1. A generic math struct (e.g. `Sum<T>`) with static init/update/merge/finalize
+//!     methods.  merge() method is for parallel implementations,
+//!     and not yet integrated.
+//!
+//!  2. A runtime wrapper (e.g. `SumAgg`) that holds a typed state enum and
+//!     implements the `Aggregator` trait. Query executor uses this wrapper.
+//!
+
+
 pub mod sum;
-pub mod top_k;
 pub mod max;
 pub mod min;
 pub mod avg;
 pub mod count;
+pub mod top_k;
 pub mod factory;
 
 use crate::processors::processor::ExecutionError;

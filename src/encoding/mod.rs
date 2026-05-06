@@ -9,7 +9,7 @@
 //!   - New codec         → add a `Codec` variant + byte-level impl. No type changes.
 //!
 //! String columns are variable-length and cannot share this stride-based interface.
-//! They will have their own encoding abstraction in a future `string_encoding` module.
+//! They will have their own encoding abstraction.
 
 pub mod plain;
 pub mod delta;
@@ -17,7 +17,9 @@ pub mod rle;
 pub mod string_dictionary;
 pub mod string_plain;
 
-
+// Sealing prevents external crates from implementing `Primitive` for
+// arbitrary types.  Without it, a caller could pass a type with a wrong WIDTH
+// or a non-LE byte layout and silently corrupt encoded data.
 mod sealed {
     pub trait Sealed {}
 }

@@ -2,6 +2,7 @@
 //!
 //! Values are ignored — only the row count matters. Output is always U64.
 //! count(*) is rejected at the parser layer; this impl only sees count(col).
+//! count() is also rejected. NULL support is not there.
 
 use crate::aggregator::Aggregator;
 use crate::processors::processor::ExecutionError;

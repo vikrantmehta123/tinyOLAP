@@ -1,3 +1,15 @@
+// Query execution pipeline for tinyOLAP.
+//
+// A query is compiled into a chain of Processor nodes by build_plan, each
+// pulling Batches from the node below it:
+//
+//   FullScan → [Filter] → [Projection | Aggregate | GroupByAggregate]
+//
+// Nodes are pull-based: the root calls next_batch(), which propagates down
+// the chain until FullScan reads from disk.  build_plan chooses which nodes
+// to wire together based on the parsed SelectStmt.
+
+
 pub mod aggregate;
 pub mod batch;
 pub mod filter;
@@ -48,6 +60,7 @@ pub fn build_plan(
 
     let group_by_names: Vec<&str> = stmt.group_by.iter().map(|s| s.as_str()).collect();
 
+    // Column pruning: only read columns that are actually needed by this query
     let scan_cols: Vec<ColumnDef> = schema
         .columns
         .iter()
