@@ -890,6 +890,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "criterion",
+ "libc",
  "lz4_flex",
  "rand",
  "rayon",

@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::os::unix::io::AsRawFd;
 
 use crate::encoding::StringCodec;
 use crate::storage::mark::{Mark, MarkReader};
@@ -19,6 +20,9 @@ impl StringColumnReader {
         let mrk_path = part_dir.join(format!("{col_name}.mrk"));
 
         let bin = File::open(bin_path)?;
+        unsafe {
+            libc::posix_fadvise(bin.as_raw_fd(), 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+        }
         let marks = MarkReader::open(&mrk_path)?.read_all()?;
 
         Ok(Self { bin, marks, cache: None })
