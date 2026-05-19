@@ -7,3 +7,4 @@ pub mod string_column_reader;
 pub mod string_column_writer;
 pub mod table_writer;
 pub mod part_discovery;
+pub mod zone_map;
