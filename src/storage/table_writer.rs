@@ -9,7 +9,7 @@ use crate::storage::column_chunk::ColumnChunk;
 use crate::storage::column_writer::{write_column};
 use crate::storage::schema::{ColumnDef, DataType, TableDef};
 use crate::storage::string_column_writer::write_string_column;
-use crate::storage::zone_map::{ZoneMapEntry, EncodedZoneMapEntry, write_zone_map};
+use crate::storage::zone_map::{ZoneMapEntry, EncodedZoneMapEntry, write_zone_map, ZoneEntry};
 
 use crate::encoding::{Codec, StringCodec};
 pub struct PartMetadata {
@@ -173,8 +173,7 @@ fn write_one_column(
     Ok(bytes.map(|(min_bytes, max_bytes)| EncodedZoneMapEntry {
         col_name: col.name.clone(),
         type_tag: col.data_type.type_tag(),
-        min_bytes,
-        max_bytes,
+        entry: ZoneEntry { min_bytes, max_bytes },
     }))
 }
 
