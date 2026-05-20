@@ -25,26 +25,9 @@ Each stage is a potential bottleneck.
 
 ## Layer 1: I/O
 
-### 1.1 Read Entire `.bin` File in One Shot
+### 1.1 `pread` / Positioned I/O
 
-Currently `ColumnReader` seeks to each block offset and reads just that block. For
-a full scan, the whole file is read anyway — one `read_to_end()` per column file is
-faster:
-- Fewer syscalls (1 vs. 1 per block).
-- The OS issues a larger sequential read, saturating disk bandwidth better.
-- Eliminates seek overhead entirely.
-
-Highest-ROI I/O change for the read path. No new dependencies.
-
-### 1.2 `posix_fadvise(POSIX_FADV_SEQUENTIAL)`
-
-Hints to the Linux kernel that reads will be sequential. The kernel increases its
-read-ahead window, prefetching the next pages before you ask for them. Requires a
-thin `libc` call. Reduces per-block I/O latency by hiding it behind the read-ahead.
-
-### 1.3 `pread` / Positioned I/O
-
-Today's reader does:
+Today's `read_granule` does:
 ```rust
 self.bin.seek(SeekFrom::Start(mark.block_offset))?;
 self.bin.read_exact(&mut compressed)?;
@@ -58,7 +41,7 @@ The bigger win: no shared mutable cursor means multiple threads can hold `Arc<Fi
 and issue concurrent reads without a `Mutex`. This directly unblocks column-level
 parallelism within a part (§2.2 below).
 
-### 1.4 `mmap`
+### 1.2 `mmap`
 
 Maps file contents into virtual address space. Reading becomes pointer arithmetic
 into a `&[u8]`; the kernel pages blocks in on demand.
@@ -76,7 +59,7 @@ mmap for writes.
 **Recommendation:** mmap the `.mrk` files now (large win, low risk). For `.bin`,
 use `pread` first (errors are recoverable), move to mmap later if profiling warrants it.
 
-### 1.5 Async I/O (`io_uring`)
+### 1.3 Async I/O (`io_uring`)
 
 The ceiling for single-machine I/O throughput. Instead of blocking threads on reads,
 submit all read requests to the kernel simultaneously and process completions as they
@@ -107,7 +90,7 @@ Can **double decompression throughput** with zero code changes. Trivial to do.
 
 Currently, for a part with 10 columns, those 10 columns are read and decompressed
 sequentially inside the rayon closure. Each column's decompression is fully independent.
-With `pread` / `Arc<File>` (§1.3), multiple threads can issue concurrent reads on the
+With `pread` / `Arc<File>` (§1.1), multiple threads can issue concurrent reads on the
 same file descriptor, unlocking column-level parallelism without opening multiple file
 handles.
 
@@ -130,24 +113,7 @@ Very complex to implement generally, but enormous speedup for specific cases. Cl
 
 ## Layer 3: Memory and Cache
 
-### 3.1 Parallel Part Scan (rayon) — DONE in TASK-004
-
-Each part is a fully independent, disjoint set of data. `FullScan` now uses
-`rayon::par_iter()` over all part IDs in `new()`, reads every part in parallel, and
-collects into a `Vec<Batch>` (reversed so `pop()` yields parts in forward order).
-`next_batch()` is a `pop()`.
-
-**Why eager collect beats bounded/chunked for this workload:**
-- Rayon work-stealing keeps all threads saturated continuously — no synchronization
-  barrier between chunks.
-- Aggregation (SUM/COUNT/AVG) is trivially fast relative to I/O + decompression,
-  so there is no downstream backpressure that would benefit from bounded buffering.
-- Tradeoff: peak memory = entire dataset. Acceptable for a learning project.
-
-**Order guarantee:** `par_iter()` on a slice is an `IndexedParallelIterator` — rayon's
-`collect()` preserves the original index order without a manual sort.
-
-### 3.2 Granule-Level Streaming Aggregation
+### 3.1 Granule-Level Streaming Aggregation
 
 **Current model:** `read_all()` → full `Vec<T>` for the entire column → hand to
 aggregator. For a 10M-row `i64` column, that is 80 MB allocated, used once, freed.
@@ -165,7 +131,7 @@ Eliminates the large per-column allocation entirely. Requires a borrowed-scan re
 API (`fn next_granule(&mut self) -> io::Result<&[T]>`) and either a new processor
 path or a `process_granule` method that bypasses `next_batch()`.
 
-### 3.3 Projection Pushdown — Verify It Works
+### 3.2 Projection Pushdown — Verify It Works
 
 `FullScan` already accepts a `columns: Vec<ColumnDef>` and only reads those columns.
 Verify the executor is actually pruning the column list before constructing `FullScan`.
@@ -173,7 +139,7 @@ A `SELECT SUM(price) FROM events` that inadvertently reads `user_id` and `name` 
 I/O proportional to those columns' sizes. Free throughput if the analyser is not already
 doing this.
 
-### 3.4 Batch Size Tuning
+### 3.3 Batch Size Tuning
 
 Currently one part = one batch. Parts with very different row counts give rayon's
 work-stealing unequal work units — one thread can do 10× the work of others. Splitting
@@ -183,17 +149,7 @@ at granule boundaries (512 rows each) gives much finer-grained load balancing.
 
 ## Layer 4: Query Planning
 
-### 4.1 Zone Maps / Min-Max Pruning (TASK-001)
-
-Store min/max per part in `part.meta` at write time. At query time, skip entire parts
-where the WHERE clause cannot match. For `WHERE ts > X` on sorted data, every part
-written before timestamp X is skipped without touching disk.
-
-**This reduces I/O from O(total_data) to O(matching_data).** No amount of parallelism
-or decompression speed can beat not reading data at all. A 10 ms query vs. a 10 s query
-for selective predicates. Requires `part.meta` (§5.1 below) as a prerequisite.
-
-### 4.2 Late Materialization
+### 4.1 Late Materialization
 
 Current model: read all columns → apply filter → aggregate.
 
@@ -230,9 +186,7 @@ part_00042/
 
 Crash recovery: any part directory without a valid `part.meta` is incomplete and gets
 deleted on startup. Contents: magic + version, row count, per-column min/max/null count/
-encoding/byte size, writer timestamp.
-
-This unlocks zone maps (§4.1) and correct crash recovery in one change.
+encoding/byte size, writer timestamp. Enables crash recovery and richer future metadata.
 
 ### 5.2 Per-Block Checksums
 
@@ -255,13 +209,11 @@ A reader opening a v2 file with v1 code should fail loudly, not parse garbage.
 | # | Optimization | Section | Impact | Effort |
 |---|---|---|---|---|
 | 1 | `target-cpu=native` | §2.1 | Medium | Trivial |
-| 2 | Read entire `.bin` file in one shot | §1.1 | High | Low |
-| 3 | Verify projection pushdown | §3.3 | High | Low |
-| 4 | `part.meta` + magic/version | §5.1, §5.3 | Unlocks zone maps | Medium |
-| 5 | Per-block checksum | §5.2 | Correctness | Low |
-| 6 | Zone maps / min-max pruning | §4.1 | Very high (selective queries) | Medium |
-| 7 | `pread` on `.bin`, mmap on `.mrk` | §1.3, §1.4 | Medium + unblocks col parallelism | Medium |
-| 8 | Column-level parallelism within a part | §2.2 | High (wide tables) | Medium |
-| 9 | Granule-level streaming aggregation | §3.2 | High (large datasets) | Medium |
-| 10 | Late materialization | §4.2 | Very high (selective queries) | High |
-| 11 | Async I/O (`io_uring`) | §1.5 | High ceiling | High |
+| 2 | Verify projection pushdown | §3.2 | High | Low |
+| 3 | `part.meta` + magic/version | §5.1, §5.3 | Crash recovery + future metadata | Medium |
+| 4 | Per-block checksum | §5.2 | Correctness | Low |
+| 5 | `pread` on `.bin`, mmap on `.mrk` | §1.1, §1.2 | Medium + unblocks col parallelism | Medium |
+| 6 | Column-level parallelism within a part | §2.2 | High (wide tables) | Medium |
+| 7 | Granule-level streaming aggregation | §3.1 | High (large datasets) | Medium |
+| 8 | Late materialization | §4.1 | Very high (selective queries) | High |
+| 9 | Async I/O (`io_uring`) | §1.3 | High ceiling | High |
