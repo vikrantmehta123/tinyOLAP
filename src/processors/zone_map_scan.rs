@@ -6,6 +6,8 @@
 use crate::parser::ast::{CmpOp, Literal, Predicate};
 use crate::storage::zone_map::{ZoneEntry, ZoneMap};
 
+use rayon::prelude::*;
+
 /// Returns true if `predicate` is provably false for every row in this part,
 /// using only the zone map's min/max bounds. False means "cannot prove —
 /// don't skip" (the safe answer; `Filter` still runs row-level).
@@ -113,11 +115,7 @@ use super::{
 /// Lazy and sequential: one part is read per `next_batch` call, and parts the
 /// zone map rules out are never read from disk at all.
 pub struct ZoneMapScan {
-    table_dir: PathBuf,
-    columns: Vec<ColumnDef>,
-    predicate: Predicate,
-    part_ids: Vec<u32>,
-    cursor: usize,
+    batches: Vec<Batch>, // reversed — pop() yields parts in ascending order
     parts_skipped: usize,
 }
 
@@ -128,14 +126,37 @@ impl ZoneMapScan {
         predicate: Predicate,
     ) -> Result<Self, ExecutionError> {
         let part_ids = discover_parts(&table_dir)?;
-        Ok(Self {
-            table_dir,
-            columns,
-            predicate,
-            part_ids,
-            cursor: 0,
-            parts_skipped: 0,
-        })
+
+        // Phase 1: keep only parts the predicate can't rule out.
+        let mut survivors: Vec<u32> = Vec::new();
+        let mut parts_skipped = 0;
+        for part_id in part_ids {
+            let part_dir = TableDef::part_dir(&table_dir, part_id);
+            // Missing/corrupt zone map → scan the part (safe).
+            let skip = matches!(read_zone_map(&part_dir), Ok(zone) if can_skip(&zone, &predicate));
+            if skip {
+                parts_skipped += 1;
+                if cfg!(debug_assertions) {
+                    eprintln!("ZoneMapScan: skipped part {part_id}");
+                }
+            } else {
+                survivors.push(part_id);
+            }
+        }
+
+        // Phase 2: read the survivors in parallel.
+        let results: Vec<Result<Batch, ExecutionError>> = survivors
+            .par_iter()
+            .map(|&part_id| {
+                let part_dir = TableDef::part_dir(&table_dir, part_id);
+                read_part(&part_dir, &columns)
+            })
+            .collect();
+
+        let mut batches: Vec<Batch> = results.into_iter().collect::<Result<_, _>>()?;
+        batches.reverse();
+
+        Ok(Self { batches, parts_skipped })
     }
 
     /// Parts pruned so far. For verification (see Step 5's test).
@@ -146,28 +167,6 @@ impl ZoneMapScan {
 
 impl Processor for ZoneMapScan {
     fn next_batch(&mut self) -> Option<Result<Batch, ExecutionError>> {
-        while self.cursor < self.part_ids.len() {
-            let part_id = self.part_ids[self.cursor];
-            self.cursor += 1;
-            let part_dir = TableDef::part_dir(&self.table_dir, part_id);
-
-            // A readable zone map may let us skip the part entirely.
-            // If it's missing or unreadable, fall back to scanning (safe).
-            if let Ok(zone) = read_zone_map(&part_dir) {
-                if can_skip(&zone, &self.predicate) {
-                    self.parts_skipped += 1;
-                    if cfg!(debug_assertions) {
-                        eprintln!(
-                            "ZoneMapScan: skipped part {} ({} skipped)",
-                            part_id, self.parts_skipped
-                        );
-                    }
-                    continue;
-                }
-            }
-
-            return Some(read_part(&part_dir, &self.columns));
-        }
-        None
+        self.batches.pop().map(Ok)
     }
 }
