@@ -5,7 +5,7 @@
 //!
 //! Bound is `Ord` (total order), which admits all integer types but not
 //! floats — floats only implement `PartialOrd` because of NaN.
-//! 
+//!
 //! Two implementations exist for Max: one for floats and one for ints.
 
 use std::marker::PhantomData;
@@ -140,7 +140,6 @@ where
     }
 }
 
-
 use crate::aggregator::Aggregator;
 use crate::processors::processor::ExecutionError;
 use crate::storage::column_chunk::ColumnChunk;
@@ -155,9 +154,16 @@ use crate::storage::schema::DataType;
 /// doesn't model nulls yet, so `finalize` returns `T::default()` (0 / 0.0) on
 /// `None`. Revisit when nulls land.
 enum MaxState {
-    I8(Option<i8>),   I16(Option<i16>), I32(Option<i32>), I64(Option<i64>),
-    U8(Option<u8>),   U16(Option<u16>), U32(Option<u32>), U64(Option<u64>),
-    F32(Option<f32>), F64(Option<f64>),
+    I8(Vec<Option<i8>>),
+    I16(Vec<Option<i16>>),
+    I32(Vec<Option<i32>>),
+    I64(Vec<Option<i64>>),
+    U8(Vec<Option<u8>>),
+    U16(Vec<Option<u16>>),
+    U32(Vec<Option<u32>>),
+    U64(Vec<Option<u64>>),
+    F32(Vec<Option<f32>>),
+    F64(Vec<Option<f64>>),
 }
 
 pub struct MaxAgg {
@@ -167,66 +173,166 @@ pub struct MaxAgg {
 impl MaxAgg {
     pub fn new(input: DataType) -> Result<Self, ExecutionError> {
         let state = match input {
-            DataType::I8  => MaxState::I8(Max::<i8>::init()),
-            DataType::I16 => MaxState::I16(Max::<i16>::init()),
-            DataType::I32 => MaxState::I32(Max::<i32>::init()),
-            DataType::I64 => MaxState::I64(Max::<i64>::init()),
-            DataType::U8  => MaxState::U8(Max::<u8>::init()),
-            DataType::U16 => MaxState::U16(Max::<u16>::init()),
-            DataType::U32 => MaxState::U32(Max::<u32>::init()),
-            DataType::U64 => MaxState::U64(Max::<u64>::init()),
-            DataType::F32 => MaxState::F32(MaxFloat::<f32>::init()),
-            DataType::F64 => MaxState::F64(MaxFloat::<f64>::init()),
-            other => return Err(ExecutionError::InvalidData(
-                format!("MAX is not supported for type {:?}", other)
-            )),
+            DataType::I8 => MaxState::I8(vec![]),
+            DataType::I16 => MaxState::I16(vec![]),
+            DataType::I32 => MaxState::I32(vec![]),
+            DataType::I64 => MaxState::I64(vec![]),
+            DataType::U8 => MaxState::U8(vec![]),
+            DataType::U16 => MaxState::U16(vec![]),
+            DataType::U32 => MaxState::U32(vec![]),
+            DataType::U64 => MaxState::U64(vec![]),
+            DataType::F32 => MaxState::F32(vec![]),
+            DataType::F64 => MaxState::F64(vec![]),
+            other => {
+                return Err(ExecutionError::InvalidData(format!(
+                    "MAX is not supported for type {:?}",
+                    other
+                )));
+            }
         };
         Ok(Self { state })
     }
 }
 
 impl Aggregator for MaxAgg {
-    fn update(&mut self, chunk: &ColumnChunk) -> Result<(), ExecutionError> {
+    fn update(
+        &mut self,
+        chunk: &ColumnChunk,
+        group_ids: &[u32],
+        n_groups: usize,
+    ) -> Result<(), ExecutionError> {
         match (&mut self.state, chunk) {
-            (MaxState::I8(s),  ColumnChunk::I8(v))  => Max::<i8>::update(s, v),
-            (MaxState::I16(s), ColumnChunk::I16(v)) => Max::<i16>::update(s, v),
-            (MaxState::I32(s), ColumnChunk::I32(v)) => Max::<i32>::update(s, v),
-            (MaxState::I64(s), ColumnChunk::I64(v)) => Max::<i64>::update(s, v),
-            (MaxState::U8(s),  ColumnChunk::U8(v))  => Max::<u8>::update(s, v),
-            (MaxState::U16(s), ColumnChunk::U16(v)) => Max::<u16>::update(s, v),
-            (MaxState::U32(s), ColumnChunk::U32(v)) => Max::<u32>::update(s, v),
-            (MaxState::U64(s), ColumnChunk::U64(v)) => Max::<u64>::update(s, v),
-            (MaxState::F32(s), ColumnChunk::F32(v)) => MaxFloat::<f32>::update(s, v),
-            (MaxState::F64(s), ColumnChunk::F64(v)) => MaxFloat::<f64>::update(s, v),
-            _ => return Err(ExecutionError::InvalidData(
-                "MAX: state/chunk type mismatch (planner bug)".into()
-            )),
+            (MaxState::I8(acc), ColumnChunk::I8(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Max::<i8>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::I16(acc), ColumnChunk::I16(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Max::<i16>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::I32(acc), ColumnChunk::I32(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Max::<i32>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::I64(acc), ColumnChunk::I64(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Max::<i64>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::U8(acc), ColumnChunk::U8(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Max::<u8>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::U16(acc), ColumnChunk::U16(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Max::<u16>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::U32(acc), ColumnChunk::U32(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Max::<u32>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::U64(acc), ColumnChunk::U64(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Max::<u64>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::F32(acc), ColumnChunk::F32(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    MaxFloat::<f32>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MaxState::F64(acc), ColumnChunk::F64(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    MaxFloat::<f64>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            _ => {
+                return Err(ExecutionError::InvalidData(
+                    "MAX: state/chunk type mismatch (planner bug)".into(),
+                ));
+            }
         }
         Ok(())
     }
 
     fn finalize(&mut self) -> ColumnChunk {
-        match self.state {
-            MaxState::I8(s)  => ColumnChunk::I8(vec![Max::<i8>::finalize(s).unwrap_or_default()]),
-            MaxState::I16(s) => ColumnChunk::I16(vec![Max::<i16>::finalize(s).unwrap_or_default()]),
-            MaxState::I32(s) => ColumnChunk::I32(vec![Max::<i32>::finalize(s).unwrap_or_default()]),
-            MaxState::I64(s) => ColumnChunk::I64(vec![Max::<i64>::finalize(s).unwrap_or_default()]),
-            MaxState::U8(s)  => ColumnChunk::U8(vec![Max::<u8>::finalize(s).unwrap_or_default()]),
-            MaxState::U16(s) => ColumnChunk::U16(vec![Max::<u16>::finalize(s).unwrap_or_default()]),
-            MaxState::U32(s) => ColumnChunk::U32(vec![Max::<u32>::finalize(s).unwrap_or_default()]),
-            MaxState::U64(s) => ColumnChunk::U64(vec![Max::<u64>::finalize(s).unwrap_or_default()]),
-            MaxState::F32(s) => ColumnChunk::F32(vec![MaxFloat::<f32>::finalize(s).unwrap_or_default()]),
-            MaxState::F64(s) => ColumnChunk::F64(vec![MaxFloat::<f64>::finalize(s).unwrap_or_default()]),
+        match &self.state {
+            MaxState::I8(acc) => {
+                ColumnChunk::I8(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::I16(acc) => {
+                ColumnChunk::I16(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::I32(acc) => {
+                ColumnChunk::I32(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::I64(acc) => {
+                ColumnChunk::I64(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::U8(acc) => {
+                ColumnChunk::U8(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::U16(acc) => {
+                ColumnChunk::U16(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::U32(acc) => {
+                ColumnChunk::U32(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::U64(acc) => {
+                ColumnChunk::U64(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::F32(acc) => {
+                ColumnChunk::F32(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MaxState::F64(acc) => {
+                ColumnChunk::F64(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
         }
     }
 
     fn output_type(&self) -> DataType {
         match self.state {
-            MaxState::I8(_)  => DataType::I8,
+            MaxState::I8(_) => DataType::I8,
             MaxState::I16(_) => DataType::I16,
             MaxState::I32(_) => DataType::I32,
             MaxState::I64(_) => DataType::I64,
-            MaxState::U8(_)  => DataType::U8,
+            MaxState::U8(_) => DataType::U8,
             MaxState::U16(_) => DataType::U16,
             MaxState::U32(_) => DataType::U32,
             MaxState::U64(_) => DataType::U64,

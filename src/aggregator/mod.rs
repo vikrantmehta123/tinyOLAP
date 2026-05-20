@@ -36,7 +36,7 @@ pub trait Aggregator {
     /// Fold one batch of input values into the running state.
     /// Returns `InvalidData` if `chunk`'s type is not what this aggregate
     /// was built for (a bug — the analyser should have caught it).
-    fn update(&mut self, chunk: &ColumnChunk) -> Result<(), ExecutionError>;
+    fn update(&mut self, chunk: &ColumnChunk, group_ids: &[u32], n_groups: usize) -> Result<(), ExecutionError>;
 
     /// Consume the aggregator and produce its single-row result column.
     fn finalize(&mut self) -> ColumnChunk;

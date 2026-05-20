@@ -107,16 +107,16 @@ use crate::storage::schema::DataType;
 /// `update` matches both state and chunk to delegate to the right `Sum<T>`.
 /// Output type equals input type (no widening yet).
 enum SumState {
-    I8(i8),
-    I16(i16),
-    I32(i32),
-    I64(i64),
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    U64(u64),
-    F32(f32),
-    F64(f64),
+    I8(Vec<i8>),
+    I16(Vec<i16>),
+    I32(Vec<i32>),
+    I64(Vec<i64>),
+    U8(Vec<u8>),
+    U16(Vec<u16>),
+    U32(Vec<u32>),
+    U64(Vec<u64>),
+    F32(Vec<f32>),
+    F64(Vec<f64>),
 }
 
 pub struct SumAgg {
@@ -126,16 +126,16 @@ pub struct SumAgg {
 impl SumAgg {
     pub fn new(input: DataType) -> Result<Self, ExecutionError> {
         let state = match input {
-            DataType::I8 => SumState::I8(Sum::<i8>::init()),
-            DataType::I16 => SumState::I16(Sum::<i16>::init()),
-            DataType::I32 => SumState::I32(Sum::<i32>::init()),
-            DataType::I64 => SumState::I64(Sum::<i64>::init()),
-            DataType::U8 => SumState::U8(Sum::<u8>::init()),
-            DataType::U16 => SumState::U16(Sum::<u16>::init()),
-            DataType::U32 => SumState::U32(Sum::<u32>::init()),
-            DataType::U64 => SumState::U64(Sum::<u64>::init()),
-            DataType::F32 => SumState::F32(Sum::<f32>::init()),
-            DataType::F64 => SumState::F64(Sum::<f64>::init()),
+            DataType::I8 => SumState::I8(vec![]),
+            DataType::I16 => SumState::I16(vec![]),
+            DataType::I32 => SumState::I32(vec![]),
+            DataType::I64 => SumState::I64(vec![]),
+            DataType::U8 => SumState::U8(vec![]),
+            DataType::U16 => SumState::U16(vec![]),
+            DataType::U32 => SumState::U32(vec![]),
+            DataType::U64 => SumState::U64(vec![]),
+            DataType::F32 => SumState::F32(vec![]),
+            DataType::F64 => SumState::F64(vec![]),
             other => {
                 return Err(ExecutionError::InvalidData(format!(
                     "SUM is not supported for type {:?}",
@@ -148,18 +148,93 @@ impl SumAgg {
 }
 
 impl Aggregator for SumAgg {
-    fn update(&mut self, chunk: &ColumnChunk) -> Result<(), ExecutionError> {
+    fn update(
+        &mut self,
+        chunk: &ColumnChunk,
+        group_ids: &[u32],
+        n_groups: usize,
+    ) -> Result<(), ExecutionError> {
         match (&mut self.state, chunk) {
-            (SumState::I8(s), ColumnChunk::I8(v)) => Sum::<i8>::update(s, v),
-            (SumState::I16(s), ColumnChunk::I16(v)) => Sum::<i16>::update(s, v),
-            (SumState::I32(s), ColumnChunk::I32(v)) => Sum::<i32>::update(s, v),
-            (SumState::I64(s), ColumnChunk::I64(v)) => Sum::<i64>::update(s, v),
-            (SumState::U8(s), ColumnChunk::U8(v)) => Sum::<u8>::update(s, v),
-            (SumState::U16(s), ColumnChunk::U16(v)) => Sum::<u16>::update(s, v),
-            (SumState::U32(s), ColumnChunk::U32(v)) => Sum::<u32>::update(s, v),
-            (SumState::U64(s), ColumnChunk::U64(v)) => Sum::<u64>::update(s, v),
-            (SumState::F32(s), ColumnChunk::F32(v)) => Sum::<f32>::update(s, v),
-            (SumState::F64(s), ColumnChunk::F64(v)) => Sum::<f64>::update(s, v),
+            (SumState::I8(acc), ColumnChunk::I8(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::I16(acc), ColumnChunk::I16(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::I32(acc), ColumnChunk::I32(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::I64(acc), ColumnChunk::I64(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::U8(acc), ColumnChunk::U8(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::U16(acc), ColumnChunk::U16(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::U32(acc), ColumnChunk::U32(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::U64(acc), ColumnChunk::U64(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::F32(acc), ColumnChunk::F32(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0.0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
+            (SumState::F64(acc), ColumnChunk::F64(vals)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, 0.0);
+                }
+                for (&val, &gid) in vals.iter().zip(group_ids) {
+                    acc[gid as usize] += val;
+                }
+            }
             _ => {
                 return Err(ExecutionError::InvalidData(
                     "SUM: state/chunk type mismatch (planner bug)".into(),
@@ -170,17 +245,17 @@ impl Aggregator for SumAgg {
     }
 
     fn finalize(&mut self) -> ColumnChunk {
-        match self.state {
-            SumState::I8(s) => ColumnChunk::I8(vec![Sum::<i8>::finalize(s)]),
-            SumState::I16(s) => ColumnChunk::I16(vec![Sum::<i16>::finalize(s)]),
-            SumState::I32(s) => ColumnChunk::I32(vec![Sum::<i32>::finalize(s)]),
-            SumState::I64(s) => ColumnChunk::I64(vec![Sum::<i64>::finalize(s)]),
-            SumState::U8(s) => ColumnChunk::U8(vec![Sum::<u8>::finalize(s)]),
-            SumState::U16(s) => ColumnChunk::U16(vec![Sum::<u16>::finalize(s)]),
-            SumState::U32(s) => ColumnChunk::U32(vec![Sum::<u32>::finalize(s)]),
-            SumState::U64(s) => ColumnChunk::U64(vec![Sum::<u64>::finalize(s)]),
-            SumState::F32(s) => ColumnChunk::F32(vec![Sum::<f32>::finalize(s)]),
-            SumState::F64(s) => ColumnChunk::F64(vec![Sum::<f64>::finalize(s)]),
+        match &self.state {
+            SumState::I8(acc) => ColumnChunk::I8(acc.clone()),
+            SumState::I16(acc) => ColumnChunk::I16(acc.clone()),
+            SumState::I32(acc) => ColumnChunk::I32(acc.clone()),
+            SumState::I64(acc) => ColumnChunk::I64(acc.clone()),
+            SumState::U8(acc) => ColumnChunk::U8(acc.clone()),
+            SumState::U16(acc) => ColumnChunk::U16(acc.clone()),
+            SumState::U32(acc) => ColumnChunk::U32(acc.clone()),
+            SumState::U64(acc) => ColumnChunk::U64(acc.clone()),
+            SumState::F32(acc) => ColumnChunk::F32(acc.clone()),
+            SumState::F64(acc) => ColumnChunk::F64(acc.clone()),
         }
     }
 
