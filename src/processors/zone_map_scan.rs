@@ -156,10 +156,12 @@ impl Processor for ZoneMapScan {
             if let Ok(zone) = read_zone_map(&part_dir) {
                 if can_skip(&zone, &self.predicate) {
                     self.parts_skipped += 1;
-                    eprintln!(
-                        "ZoneMapScan: skipped part {} ({} skipped)",
-                        part_id, self.parts_skipped
-                    );
+                    if cfg!(debug_assertions) {
+                        eprintln!(
+                            "ZoneMapScan: skipped part {} ({} skipped)",
+                            part_id, self.parts_skipped
+                        );
+                    }
                     continue;
                 }
             }
