@@ -21,13 +21,12 @@ pub struct AggSpec {
 
 pub struct GroupByAggregate {
     input: Box<dyn Processor>,
-    /// Indices of the GROUP BY columns in the input batch.
     group_by_indices: Vec<usize>,
-    /// Schema of the GROUP BY columns, carried into the output batch.
     group_by_schema: Vec<ColumnDef>,
     agg_specs: Vec<AggSpec>,
-    /// One aggregator-set per distinct group key.
-    groups: HashMap<GroupKey, Vec<Box<dyn Aggregator>>>,
+    group_ids: HashMap<GroupKey, u32>,
+    aggs: Vec<Box<dyn Aggregator>>,
+    n_groups: usize,
     done: bool,
 }
 
@@ -38,12 +37,21 @@ impl GroupByAggregate {
         group_by_schema: Vec<ColumnDef>,
         agg_specs: Vec<AggSpec>,
     ) -> Self {
+        let aggs = agg_specs
+            .iter()
+            .map(|spec| {
+                aggregator::build(spec.func.clone(), spec.input_type.clone())
+                    .expect("aggregator build failed: type should have been validated")
+            })
+            .collect();
         Self {
             input,
             group_by_indices,
             group_by_schema,
             agg_specs,
-            groups: HashMap::new(),
+            group_ids: HashMap::new(),
+            aggs,
+            n_groups: 0,
             done: false,
         }
     }
@@ -54,84 +62,75 @@ impl GroupByAggregate {
     /// and `agg_specs`/`group_by_indices` as shared refs simultaneously —
     /// the borrow checker cannot prove disjointness through `&mut self`.
     fn drain_batch(
-        groups: &mut HashMap<GroupKey, Vec<Box<dyn Aggregator>>>,
+        group_ids: &mut HashMap<GroupKey, u32>,
+        n_groups: &mut usize,
+        aggs: &mut Vec<Box<dyn Aggregator>>,
         agg_specs: &[AggSpec],
         group_by_indices: &[usize],
         batch: &Batch,
     ) -> Result<(), ExecutionError> {
         let n_rows = batch.columns[0].len();
 
+        // Phase 1: assign a group ID to every row.
+        let mut row_group_ids: Vec<u32> = Vec::with_capacity(n_rows);
         for row in 0..n_rows {
             let key: GroupKey = group_by_indices
                 .iter()
                 .map(|&idx| ScalarValue::from_chunk(&batch.columns[idx], row))
                 .collect();
-
-            // Look up or create the aggregator set for this group key.
-            // Using Occupied/Vacant directly avoids a second HashMap lookup
-            // and keeps the borrow on `groups` separate from `agg_specs`.
-            let aggs = match groups.entry(key) {
-                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            let next_id = *n_groups as u32;
+            let id = match group_ids.entry(key) {
+                std::collections::hash_map::Entry::Occupied(e) => *e.get(),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    let fresh: Vec<Box<dyn Aggregator>> = agg_specs
-                        .iter()
-                        .map(|spec| {
-                            // Types were validated by the analyser — this should
-                            // never fail at runtime.
-                            aggregator::build(spec.func.clone(), spec.input_type.clone())
-                                .expect("aggregator build failed: type should have been validated")
-                        })
-                        .collect();
-                    e.insert(fresh)
+                    e.insert(next_id);
+                    *n_groups += 1;
+                    next_id
                 }
             };
+            row_group_ids.push(id);
+        }
 
-            // Feed a one-element chunk for this row to each aggregator.
-            for (agg, spec) in aggs.iter_mut().zip(agg_specs.iter()) {
-                let single_row = ScalarValue::build_column(vec![
-                    ScalarValue::from_chunk(&batch.columns[spec.input_col_idx], row),
-                ]);
-                agg.update(&single_row)?;
-            }
+        // Phase 2: feed each aggregator the whole column + group IDs at once.
+        for (agg, spec) in aggs.iter_mut().zip(agg_specs.iter()) {
+            agg.update(
+                &batch.columns[spec.input_col_idx],
+                &row_group_ids,
+                *n_groups,
+            )?;
         }
 
         Ok(())
     }
 
-    /// Finalize all groups and build the output Batch.
     fn finalize_groups(
         group_by_schema: &[ColumnDef],
         agg_specs: &[AggSpec],
-        groups: &mut HashMap<GroupKey, Vec<Box<dyn Aggregator>>>,
+        group_ids: &mut HashMap<GroupKey, u32>,
+        aggs: &mut Vec<Box<dyn Aggregator>>,
     ) -> Batch {
         let n_group_by = group_by_schema.len();
-        let n_aggs = agg_specs.len();
-        let n_groups = groups.len();
 
-        // Collect one ScalarValue per (group, column) position, then
-        // convert to ColumnChunks column-by-column at the end.
-        let mut key_cols: Vec<Vec<ScalarValue>> =
-            (0..n_group_by).map(|_| Vec::with_capacity(n_groups)).collect();
-        let mut agg_scalars: Vec<Vec<ScalarValue>> =
-            (0..n_aggs).map(|_| Vec::with_capacity(n_groups)).collect();
+        // Sort keys by group ID so key columns align with aggregator output order.
+        let mut keyed: Vec<(u32, GroupKey)> = group_ids.drain().map(|(k, id)| (id, k)).collect();
+        keyed.sort_unstable_by_key(|(id, _)| *id);
 
-        for (key, mut aggs) in groups.drain() {
+        let mut key_cols: Vec<Vec<ScalarValue>> = (0..n_group_by)
+            .map(|_| Vec::with_capacity(keyed.len()))
+            .collect();
+        for (_, key) in keyed {
             for (i, scalar) in key.into_iter().enumerate() {
                 key_cols[i].push(scalar);
-            }
-            for (i, agg) in aggs.iter_mut().enumerate() {
-                // finalize() produces a single-row ColumnChunk; we extract row 0.
-                let chunk = agg.finalize();
-                agg_scalars[i].push(ScalarValue::from_chunk(&chunk, 0));
             }
         }
 
         let mut schema: Vec<ColumnDef> = group_by_schema.to_vec();
         schema.extend(agg_specs.iter().map(|s| s.output_col.clone()));
 
-        let mut columns: Vec<ColumnChunk> =
-            key_cols.into_iter().map(ScalarValue::build_column).collect();
-        columns.extend(agg_scalars.into_iter().map(ScalarValue::build_column));
+        let mut columns: Vec<ColumnChunk> = key_cols
+            .into_iter()
+            .map(ScalarValue::build_column)
+            .collect();
+        columns.extend(aggs.iter_mut().map(|agg| agg.finalize()));
 
         Batch { schema, columns }
     }
@@ -143,14 +142,15 @@ impl Processor for GroupByAggregate {
             return None;
         }
 
-        // Drain: consume all input and accumulate group state.
         while let Some(result) = self.input.next_batch() {
             let batch = match result {
                 Ok(b) => b,
                 Err(e) => return Some(Err(e)),
             };
             if let Err(e) = Self::drain_batch(
-                &mut self.groups,
+                &mut self.group_ids,
+                &mut self.n_groups,
+                &mut self.aggs,
                 &self.agg_specs,
                 &self.group_by_indices,
                 &batch,
@@ -163,7 +163,8 @@ impl Processor for GroupByAggregate {
         Some(Ok(Self::finalize_groups(
             &self.group_by_schema,
             &self.agg_specs,
-            &mut self.groups,
+            &mut self.group_ids,
+            &mut self.aggs,
         )))
     }
 }

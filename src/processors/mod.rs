@@ -18,6 +18,7 @@ pub mod group_by_aggregate;
 pub mod processor;
 pub mod projection;
 pub mod scalar_value;
+pub mod zone_map_scan;
 
 use std::path::PathBuf;
 
@@ -32,6 +33,7 @@ use self::{
     group_by_aggregate::{AggSpec, GroupByAggregate},
     processor::{ExecutionError, Processor},
     projection::Projection,
+    zone_map_scan::ZoneMapScan,
 };
 
 pub fn build_plan(
@@ -73,11 +75,17 @@ pub fn build_plan(
         .collect();
 
     let scan_cols_snapshot = scan_cols.clone();
-    let mut node: Box<dyn Processor> = Box::new(FullScan::new(table_dir, scan_cols)?);
 
-    if let Some(pred) = stmt.where_clause.clone() {
-        node = Box::new(Filter::new(node, pred));
-    }
+    let mut node: Box<dyn Processor> = match stmt.where_clause.clone() {
+        Some(pred) => {
+            // WHERE present: prune parts with the zone map, then row-filter. scan_cols is moved here
+            let scan = ZoneMapScan::new(table_dir, scan_cols, pred.clone())?;
+            Box::new(Filter::new(Box::new(scan), pred))
+        }
+        // No WHERE: nothing to prune — plain FullScan.
+        None => Box::new(FullScan::new(table_dir, scan_cols)?),
+    };
+
 
     let has_agg_exprs = exprs.iter().any(|e| matches!(e, SelectExpr::Agg { .. }));
     let has_group_by = !stmt.group_by.is_empty();

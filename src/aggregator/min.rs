@@ -3,7 +3,7 @@
 //! Integer state uses `Min<T>` (`Ord`). Float state uses `MinFloat<T>`
 //! (`PartialOrd`, NaN-skipping — same convention as `MaxFloat`).
 //! State is `Option<T>`: `None` means no values seen yet.
-//! 
+//!
 //! Two structs exist for Min: for ints and floats. Similar to Max
 
 use std::marker::PhantomData;
@@ -19,7 +19,9 @@ impl<T> Min<T>
 where
     T: Copy + Ord,
 {
-    pub fn init() -> Option<T> { None }
+    pub fn init() -> Option<T> {
+        None
+    }
 
     pub fn update(state: &mut Option<T>, input: &[T]) {
         let chunk_min = input.iter().copied().min();
@@ -34,7 +36,9 @@ where
         }
     }
 
-    pub fn finalize(state: Option<T>) -> Option<T> { state }
+    pub fn finalize(state: Option<T>) -> Option<T> {
+        state
+    }
 }
 
 // NaN handling: comparisons against NaN return false in both directions,
@@ -45,7 +49,9 @@ impl<T> MinFloat<T>
 where
     T: Copy + PartialOrd,
 {
-    pub fn init() -> Option<T> { None }
+    pub fn init() -> Option<T> {
+        None
+    }
 
     pub fn update(state: &mut Option<T>, input: &[T]) {
         for &v in input {
@@ -66,13 +72,22 @@ where
         }
     }
 
-    pub fn finalize(state: Option<T>) -> Option<T> { state }
+    pub fn finalize(state: Option<T>) -> Option<T> {
+        state
+    }
 }
 
 enum MinState {
-    I8(Option<i8>),   I16(Option<i16>), I32(Option<i32>), I64(Option<i64>),
-    U8(Option<u8>),   U16(Option<u16>), U32(Option<u32>), U64(Option<u64>),
-    F32(Option<f32>), F64(Option<f64>),
+    I8(Vec<Option<i8>>),
+    I16(Vec<Option<i16>>),
+    I32(Vec<Option<i32>>),
+    I64(Vec<Option<i64>>),
+    U8(Vec<Option<u8>>),
+    U16(Vec<Option<u16>>),
+    U32(Vec<Option<u32>>),
+    U64(Vec<Option<u64>>),
+    F32(Vec<Option<f32>>),
+    F64(Vec<Option<f64>>),
 }
 
 pub struct MinAgg {
@@ -82,66 +97,166 @@ pub struct MinAgg {
 impl MinAgg {
     pub fn new(input: DataType) -> Result<Self, ExecutionError> {
         let state = match input {
-            DataType::I8  => MinState::I8(Min::<i8>::init()),
-            DataType::I16 => MinState::I16(Min::<i16>::init()),
-            DataType::I32 => MinState::I32(Min::<i32>::init()),
-            DataType::I64 => MinState::I64(Min::<i64>::init()),
-            DataType::U8  => MinState::U8(Min::<u8>::init()),
-            DataType::U16 => MinState::U16(Min::<u16>::init()),
-            DataType::U32 => MinState::U32(Min::<u32>::init()),
-            DataType::U64 => MinState::U64(Min::<u64>::init()),
-            DataType::F32 => MinState::F32(MinFloat::<f32>::init()),
-            DataType::F64 => MinState::F64(MinFloat::<f64>::init()),
-            other => return Err(ExecutionError::InvalidData(
-                format!("MIN is not supported for type {:?}", other)
-            )),
+            DataType::I8 => MinState::I8(vec![]),
+            DataType::I16 => MinState::I16(vec![]),
+            DataType::I32 => MinState::I32(vec![]),
+            DataType::I64 => MinState::I64(vec![]),
+            DataType::U8 => MinState::U8(vec![]),
+            DataType::U16 => MinState::U16(vec![]),
+            DataType::U32 => MinState::U32(vec![]),
+            DataType::U64 => MinState::U64(vec![]),
+            DataType::F32 => MinState::F32(vec![]),
+            DataType::F64 => MinState::F64(vec![]),
+            other => {
+                return Err(ExecutionError::InvalidData(format!(
+                    "MIN is not supported for type {:?}",
+                    other
+                )));
+            }
         };
         Ok(Self { state })
     }
 }
 
 impl Aggregator for MinAgg {
-    fn update(&mut self, chunk: &ColumnChunk) -> Result<(), ExecutionError> {
+    fn update(
+        &mut self,
+        chunk: &ColumnChunk,
+        group_ids: &[u32],
+        n_groups: usize,
+    ) -> Result<(), ExecutionError> {
         match (&mut self.state, chunk) {
-            (MinState::I8(s),  ColumnChunk::I8(v))  => Min::<i8>::update(s, v),
-            (MinState::I16(s), ColumnChunk::I16(v)) => Min::<i16>::update(s, v),
-            (MinState::I32(s), ColumnChunk::I32(v)) => Min::<i32>::update(s, v),
-            (MinState::I64(s), ColumnChunk::I64(v)) => Min::<i64>::update(s, v),
-            (MinState::U8(s),  ColumnChunk::U8(v))  => Min::<u8>::update(s, v),
-            (MinState::U16(s), ColumnChunk::U16(v)) => Min::<u16>::update(s, v),
-            (MinState::U32(s), ColumnChunk::U32(v)) => Min::<u32>::update(s, v),
-            (MinState::U64(s), ColumnChunk::U64(v)) => Min::<u64>::update(s, v),
-            (MinState::F32(s), ColumnChunk::F32(v)) => MinFloat::<f32>::update(s, v),
-            (MinState::F64(s), ColumnChunk::F64(v)) => MinFloat::<f64>::update(s, v),
-            _ => return Err(ExecutionError::InvalidData(
-                "MIN: state/chunk type mismatch (planner bug)".into()
-            )),
+            (MinState::I8(acc), ColumnChunk::I8(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Min::<i8>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::I16(acc), ColumnChunk::I16(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Min::<i16>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::I32(acc), ColumnChunk::I32(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Min::<i32>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::I64(acc), ColumnChunk::I64(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Min::<i64>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::U8(acc), ColumnChunk::U8(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Min::<u8>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::U16(acc), ColumnChunk::U16(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Min::<u16>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::U32(acc), ColumnChunk::U32(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Min::<u32>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::U64(acc), ColumnChunk::U64(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    Min::<u64>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::F32(acc), ColumnChunk::F32(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    MinFloat::<f32>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            (MinState::F64(acc), ColumnChunk::F64(v)) => {
+                if acc.len() < n_groups {
+                    acc.resize(n_groups, None);
+                }
+                for (&val, &gid) in v.iter().zip(group_ids) {
+                    MinFloat::<f64>::merge(&mut acc[gid as usize], Some(val));
+                }
+            }
+            _ => {
+                return Err(ExecutionError::InvalidData(
+                    "MIN: state/chunk type mismatch (planner bug)".into(),
+                ));
+            }
         }
         Ok(())
     }
 
     fn finalize(&mut self) -> ColumnChunk {
-        match self.state {
-            MinState::I8(s)  => ColumnChunk::I8(vec![Min::<i8>::finalize(s).unwrap_or_default()]),
-            MinState::I16(s) => ColumnChunk::I16(vec![Min::<i16>::finalize(s).unwrap_or_default()]),
-            MinState::I32(s) => ColumnChunk::I32(vec![Min::<i32>::finalize(s).unwrap_or_default()]),
-            MinState::I64(s) => ColumnChunk::I64(vec![Min::<i64>::finalize(s).unwrap_or_default()]),
-            MinState::U8(s)  => ColumnChunk::U8(vec![Min::<u8>::finalize(s).unwrap_or_default()]),
-            MinState::U16(s) => ColumnChunk::U16(vec![Min::<u16>::finalize(s).unwrap_or_default()]),
-            MinState::U32(s) => ColumnChunk::U32(vec![Min::<u32>::finalize(s).unwrap_or_default()]),
-            MinState::U64(s) => ColumnChunk::U64(vec![Min::<u64>::finalize(s).unwrap_or_default()]),
-            MinState::F32(s) => ColumnChunk::F32(vec![MinFloat::<f32>::finalize(s).unwrap_or_default()]),
-            MinState::F64(s) => ColumnChunk::F64(vec![MinFloat::<f64>::finalize(s).unwrap_or_default()]),
+        match &self.state {
+            MinState::I8(acc) => {
+                ColumnChunk::I8(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::I16(acc) => {
+                ColumnChunk::I16(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::I32(acc) => {
+                ColumnChunk::I32(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::I64(acc) => {
+                ColumnChunk::I64(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::U8(acc) => {
+                ColumnChunk::U8(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::U16(acc) => {
+                ColumnChunk::U16(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::U32(acc) => {
+                ColumnChunk::U32(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::U64(acc) => {
+                ColumnChunk::U64(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::F32(acc) => {
+                ColumnChunk::F32(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
+            MinState::F64(acc) => {
+                ColumnChunk::F64(acc.iter().map(|s| s.unwrap_or_default()).collect())
+            }
         }
     }
 
     fn output_type(&self) -> DataType {
         match self.state {
-            MinState::I8(_)  => DataType::I8,
+            MinState::I8(_) => DataType::I8,
             MinState::I16(_) => DataType::I16,
             MinState::I32(_) => DataType::I32,
             MinState::I64(_) => DataType::I64,
-            MinState::U8(_)  => DataType::U8,
+            MinState::U8(_) => DataType::U8,
             MinState::U16(_) => DataType::U16,
             MinState::U32(_) => DataType::U32,
             MinState::U64(_) => DataType::U64,

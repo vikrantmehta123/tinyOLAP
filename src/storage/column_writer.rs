@@ -5,11 +5,7 @@ use std::path::Path;
 use crate::config::{BLOCK_BUFFER_SIZE, GRANULE_SIZE};
 use crate::encoding::{Codec, Primitive};
 use crate::storage::mark::{Mark, MarkWriter};
-
-pub struct ColumnStats {
-    pub rows: u64,
-    pub bin_bytes: u64,
-}
+use crate::storage::zone_map::ZoneMapEntry;
 
 /// Write one non-string column to disk for a single part.
 ///
@@ -19,12 +15,14 @@ pub struct ColumnStats {
 /// One mark per granule, buffered until the block lands on disk so we can
 /// stamp it with the real block_offset. fsync is called once at the end —
 /// durability boundary is one INSERT = one part.
-pub fn write_column<T: Primitive>(
+/// Tracks min/max across all values in a single pass and returns them as a
+/// `ZoneMapEntry`. Returns `None` if the column has no rows.
+pub fn write_column<T: Primitive + PartialOrd>(
     part_dir: &Path,
     col_name: &str,
     values: &[T],
     codec: Codec,
-) -> io::Result<ColumnStats> {
+) -> io::Result<Option<ZoneMapEntry<T>>> {
     let bin_path = part_dir.join(format!("{col_name}.bin"));
     let mrk_path = part_dir.join(format!("{col_name}.mrk"));
 
@@ -39,8 +37,10 @@ pub fn write_column<T: Primitive>(
 
     let mut rows_in_current_granule: usize = 0;
     let mut rows_in_current_block: usize = 0;
-    let mut total_rows: u64 = 0;
     let mut bin_bytes: u64 = 0;
+
+    let mut min_val: Option<T> = None;
+    let mut max_val: Option<T> = None;
 
     for &v in values {
         // First row of a granule: push a mark before appending the value.
@@ -56,7 +56,15 @@ pub fn write_column<T: Primitive>(
         block_values.push(v);
         rows_in_current_granule += 1;
         rows_in_current_block += 1;
-        total_rows += 1;
+
+        min_val = Some(match min_val {
+            None => v,
+            Some(m) => if v < m { v } else { m },
+        });
+        max_val = Some(match max_val {
+            None => v,
+            Some(m) => if v > m { v } else { m },
+        });
 
         // Granules are atomic — only consider flushing on a boundary, never mid-granule.
         if rows_in_current_granule == GRANULE_SIZE {
@@ -91,10 +99,8 @@ pub fn write_column<T: Primitive>(
     bin.get_ref().sync_all()?;
     marks.flush()?;
 
-    Ok(ColumnStats {
-        rows: total_rows,
-        bin_bytes,
-    })
+    Ok(min_val.zip(max_val).map(|(min, max)| ZoneMapEntry { min, max }))
+
 }
 
 /// Serialize, encode, compress and write the current block. Patches pending

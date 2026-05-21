@@ -18,6 +18,28 @@ pub enum DataType {
     Str,
 }
 
+impl DataType {
+    /// Stable on-disk tag for this type. Used in zone maps and other
+    /// type-erased on-disk structures. Values must not change once written.
+    pub fn type_tag(&self) -> u8 {
+        match self {
+            DataType::I8   => 1,
+            DataType::I16  => 2,
+            DataType::I32  => 3,
+            DataType::I64  => 4,
+            DataType::U8   => 5,
+            DataType::U16  => 6,
+            DataType::U32  => 7,
+            DataType::U64  => 8,
+            DataType::F32  => 9,
+            DataType::F64  => 10,
+            DataType::Bool => 11,
+            DataType::Str  => 12,
+        }
+    }
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnDef {
     pub name: String,

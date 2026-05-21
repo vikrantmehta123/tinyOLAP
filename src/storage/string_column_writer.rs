@@ -3,7 +3,6 @@ use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
 use crate::config::{BLOCK_BUFFER_SIZE, GRANULE_SIZE};
-use crate::storage::column_writer::ColumnStats;
 use crate::storage::mark::{Mark, MarkWriter};
 use crate::encoding::StringCodec;
 
@@ -19,7 +18,7 @@ pub fn write_string_column(
     col_name: &str,
     values: &[String],
     codec: StringCodec,
-) -> io::Result<ColumnStats> {
+) -> io::Result<()> {
     let bin_path = part_dir.join(format!("{col_name}.bin"));
     let mrk_path = part_dir.join(format!("{col_name}.mrk"));
 
@@ -34,7 +33,6 @@ pub fn write_string_column(
     // marks use strings_in_block (a count) instead of byte offsets.
     let mut plain_bytes_in_block: usize = 0;
     let mut strings_in_block: usize = 0;
-    let mut total_rows: u64 = 0;
     let mut bin_bytes: u64 = 0;
 
     for s in values {
@@ -71,7 +69,6 @@ pub fn write_string_column(
         rows_in_current_granule += 1;
         plain_bytes_in_block += plain_size;
         strings_in_block += 1;
-        total_rows += 1;
 
         // Row cap: granules are also bounded by GRANULE_SIZE rows.
         if rows_in_current_granule == GRANULE_SIZE {
@@ -107,7 +104,7 @@ pub fn write_string_column(
     bin.get_ref().sync_all()?;
     marks.flush()?;
 
-    Ok(ColumnStats { rows: total_rows, bin_bytes })
+    Ok(())
 }
 
 fn flush_block(

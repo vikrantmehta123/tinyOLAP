@@ -10,23 +10,27 @@ use crate::storage::column_chunk::ColumnChunk;
 use crate::storage::schema::DataType;
 
 pub struct CountAgg {
-    count: u64,
+    count: Vec<u64>,
 }
 
 impl CountAgg {
     pub fn new() -> Self {
-        Self { count: 0 }
+        Self { count: vec![] }
     }
 }
 
 impl Aggregator for CountAgg {
-    fn update(&mut self, chunk: &ColumnChunk) -> Result<(), ExecutionError> {
-        self.count += chunk.len() as u64;
+    fn update(&mut self, chunk: &ColumnChunk, group_ids: &[u32], n_groups: usize) -> Result<(), ExecutionError> {
+        if self.count.len() < n_groups { self.count.resize(n_groups, 0);}
+        
+        for &gid in group_ids {
+            self.count[gid as usize] += 1;
+        }
         Ok(())
     }
 
     fn finalize(&mut self) -> ColumnChunk {
-        ColumnChunk::U64(vec![self.count])
+        ColumnChunk::U64(self.count.clone())
     }
 
     fn output_type(&self) -> DataType {

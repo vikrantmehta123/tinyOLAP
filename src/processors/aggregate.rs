@@ -21,7 +21,13 @@ impl Aggregate {
         input_idx: Vec<usize>,
         output_schema: Vec<ColumnDef>,
     ) -> Self {
-        Self { input, aggs, input_idx, output_schema, done: false }
+        Self {
+            input,
+            aggs,
+            input_idx,
+            output_schema,
+            done: false,
+        }
     }
 }
 
@@ -39,7 +45,8 @@ impl Processor for Aggregate {
                 Err(e) => return Some(Err(e)),
             };
             for (agg, &idx) in self.aggs.iter_mut().zip(self.input_idx.iter()) {
-                if let Err(e) = agg.update(&batch.columns[idx]) {
+                let group_ids = vec![0u32; batch.columns[idx].len()];
+                if let Err(e) = agg.update(&batch.columns[idx], &group_ids, 1) {
                     return Some(Err(e));
                 }
             }
@@ -54,6 +61,5 @@ impl Processor for Aggregate {
             schema: self.output_schema.clone(),
             columns,
         }))
-
     }
 }

@@ -6,15 +6,15 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use rayon::prelude::*;
 
 use crate::storage::column_chunk::ColumnChunk;
-use crate::storage::column_writer::{write_column, ColumnStats};
+use crate::storage::column_writer::{write_column};
 use crate::storage::schema::{ColumnDef, DataType, TableDef};
 use crate::storage::string_column_writer::write_string_column;
+use crate::storage::zone_map::{ZoneMapEntry, EncodedZoneMapEntry, write_zone_map, ZoneEntry};
 
 use crate::encoding::{Codec, StringCodec};
 pub struct PartMetadata {
     pub part_id: u32,
     pub rows: u64,
-    pub columns: Vec<ColumnStats>,
 }
 
 pub struct TableWriter {
@@ -64,19 +64,26 @@ impl TableWriter {
         fs::create_dir_all(&tmp_dir)?;
 
         // ---- 3. Write all columns in parallel. ----
-        let result: io::Result<Vec<ColumnStats>> = chunks
+        let result: io::Result<Vec<Option<EncodedZoneMapEntry>>> = chunks
             .par_iter()
             .zip(self.schema.columns.par_iter())
             .map(|(chunk, col)| write_one_column(&tmp_dir, col, chunk))
             .collect();
 
-        let stats = match result {
-            Ok(s) => s,
+        let entries: Vec<EncodedZoneMapEntry> = match result {
+            Ok(per_column) => per_column.into_iter().flatten().collect(),
             Err(e) => {
-                let _ = fs::remove_dir_all(&tmp_dir); // best-effort cleanup
+                let _ = fs::remove_dir_all(&tmp_dir);
                 return Err(e);
             }
         };
+
+        // Write part.zonemap into the tmp dir; the rename below makes it
+        // atomic with the rest of the part.
+        if let Err(e) = write_zone_map(&tmp_dir, &entries) {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            return Err(e);
+        }
 
         // ---- 4. Atomic-ish finalize: rename tmp -> part_NNNNN. ----
         fs::rename(&tmp_dir, &final_dir)?;
@@ -85,7 +92,6 @@ impl TableWriter {
         Ok(PartMetadata {
             part_id,
             rows: row_count as u64,
-            columns: stats,
         })
     }
 }
@@ -118,26 +124,57 @@ fn check_type(chunk: &ColumnChunk, col: &ColumnDef) -> io::Result<()> {
     Ok(())
 }
 
+fn widen_signed<T: Copy + Into<i64>>(z: ZoneMapEntry<T>) -> ([u8; 8], [u8; 8]) {
+    let min: i64 = z.min.into();
+    let max: i64 = z.max.into();
+    (min.to_le_bytes(), max.to_le_bytes())
+}
+
+fn widen_unsigned<T: Copy + Into<u64>>(z: ZoneMapEntry<T>) -> ([u8; 8], [u8; 8]) {
+    let min: u64 = z.min.into();
+    let max: u64 = z.max.into();
+    (min.to_le_bytes(), max.to_le_bytes())
+}
+
+fn widen_float<T: Copy + Into<f64>>(z: ZoneMapEntry<T>) -> ([u8; 8], [u8; 8]) {
+    let min: f64 = z.min.into();
+    let max: f64 = z.max.into();
+    (min.to_bits().to_le_bytes(), max.to_bits().to_le_bytes())
+}
+
 fn write_one_column(
     part_dir: &Path,
     col: &ColumnDef,
     chunk: &ColumnChunk,
-) -> io::Result<ColumnStats> {
+) -> io::Result<Option<EncodedZoneMapEntry>> {
     let codec = codec_for(col);
-    match chunk {
-        ColumnChunk::I8(v)   => write_column::<i8>(part_dir, &col.name, v, codec),
-        ColumnChunk::I16(v)  => write_column::<i16>(part_dir, &col.name, v, codec),
-        ColumnChunk::I32(v)  => write_column::<i32>(part_dir, &col.name, v, codec),
-        ColumnChunk::I64(v)  => write_column::<i64>(part_dir, &col.name, v, codec),
-        ColumnChunk::U8(v)   => write_column::<u8>(part_dir, &col.name, v, codec),
-        ColumnChunk::U16(v)  => write_column::<u16>(part_dir, &col.name, v, codec),
-        ColumnChunk::U32(v)  => write_column::<u32>(part_dir, &col.name, v, codec),
-        ColumnChunk::U64(v)  => write_column::<u64>(part_dir, &col.name, v, codec),
-        ColumnChunk::F32(v)  => write_column::<f32>(part_dir, &col.name, v, codec),
-        ColumnChunk::F64(v)  => write_column::<f64>(part_dir, &col.name, v, codec),
-        ColumnChunk::Bool(v) => write_column::<bool>(part_dir, &col.name, v, codec),
-        ColumnChunk::Str(v)  => write_string_column(part_dir, &col.name, v, StringCodec::Plain),
-    }
+
+    let bytes = match chunk {
+        ColumnChunk::I8(v)   => write_column::<i8>(part_dir,  &col.name, v, codec)?.map(widen_signed),
+        ColumnChunk::I16(v)  => write_column::<i16>(part_dir, &col.name, v, codec)?.map(widen_signed),
+        ColumnChunk::I32(v)  => write_column::<i32>(part_dir, &col.name, v, codec)?.map(widen_signed),
+        ColumnChunk::I64(v)  => write_column::<i64>(part_dir, &col.name, v, codec)?.map(widen_signed),
+        ColumnChunk::U8(v)   => write_column::<u8>(part_dir,  &col.name, v, codec)?.map(widen_unsigned),
+        ColumnChunk::U16(v)  => write_column::<u16>(part_dir, &col.name, v, codec)?.map(widen_unsigned),
+        ColumnChunk::U32(v)  => write_column::<u32>(part_dir, &col.name, v, codec)?.map(widen_unsigned),
+        ColumnChunk::U64(v)  => write_column::<u64>(part_dir, &col.name, v, codec)?.map(widen_unsigned),
+        ColumnChunk::F32(v)  => write_column::<f32>(part_dir, &col.name, v, codec)?.map(widen_float),
+        ColumnChunk::F64(v)  => write_column::<f64>(part_dir, &col.name, v, codec)?.map(widen_float),
+        ColumnChunk::Bool(v) => {
+            write_column::<bool>(part_dir, &col.name, v, codec)?;
+            None
+        }
+        ColumnChunk::Str(v) => {
+            write_string_column(part_dir, &col.name, v, StringCodec::Plain)?;
+            None
+        }
+    };
+
+    Ok(bytes.map(|(min_bytes, max_bytes)| EncodedZoneMapEntry {
+        col_name: col.name.clone(),
+        type_tag: col.data_type.type_tag(),
+        entry: ZoneEntry { min_bytes, max_bytes },
+    }))
 }
 
 /// Codec selection lives here so column_writer stays type-blind.

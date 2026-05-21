@@ -41,3 +41,8 @@ path = "benches/query/pipeline.rs"
 [lib]
 name = "tinyolap"
 path = "src/lib.rs"
+
+[[bench]]
+name = "query_zone_map"
+harness = false
+path = "benches/query/zone_map.rs"
