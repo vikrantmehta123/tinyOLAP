@@ -6,7 +6,7 @@ use crate::catalog::schema::DataType;
 use std::fmt;
 
 pub enum LiteralValue {
-    Int(i64), // No need to differentiate between 18, i16, i32, i64 at logical plan
+    Int(i64),   // No need to differentiate between 18, i16, i32, i64 at logical plan
     Float(f64), // Same f32, etc. Don't need it in Logical Plan
     Str(String),
     Bool(bool),
@@ -71,7 +71,6 @@ pub enum LogicalPlan {
 }
 
 impl LogicalPlan {
-
     // Returns references to child nodes. Used by the optimizer to traverse the tree.
     pub fn children(&self) -> Vec<&LogicalPlan> {
         match self {
@@ -82,8 +81,36 @@ impl LogicalPlan {
             LogicalPlan::Limit { input, .. } => vec![input],
         }
     }
-}
 
+    // Rebuilds this node with rewritten children.
+    // Used when rewriting the Logical Plan using OptimizerRules
+    pub fn with_new_children(self, mut new_children: Vec<LogicalPlan>) -> LogicalPlan {
+        match self {
+            LogicalPlan::Scan { .. } => self,
+            LogicalPlan::Filter { predicate, .. } => LogicalPlan::Filter {
+                predicate,
+                input: Box::new(new_children.remove(0)),
+            },
+            LogicalPlan::Project { projections, .. } => LogicalPlan::Project {
+                projections,
+                input: Box::new(new_children.remove(0)),
+            },
+            LogicalPlan::Aggregate {
+                group_by,
+                aggregates,
+                ..
+            } => LogicalPlan::Aggregate {
+                group_by,
+                aggregates,
+                input: Box::new(new_children.remove(0)),
+            },
+            LogicalPlan::Limit { limit, .. } => LogicalPlan::Limit {
+                limit,
+                input: Box::new(new_children.remove(0)),
+            },
+        }
+    }
+}
 
 impl fmt::Display for LogicalPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -107,10 +134,20 @@ impl LogicalPlan {
                 writeln!(f, "{}Project({})", indent, cols.join(", "))?;
                 input.fmt_indented(f, depth + 1)
             }
-            LogicalPlan::Aggregate { group_by, aggregates, input } => {
+            LogicalPlan::Aggregate {
+                group_by,
+                aggregates,
+                input,
+            } => {
                 let gb: Vec<String> = group_by.iter().map(|e| e.to_string()).collect();
                 let agg: Vec<String> = aggregates.iter().map(|e| e.to_string()).collect();
-                writeln!(f, "{}Aggregate(group_by=[{}], aggs=[{}])", indent, gb.join(", "), agg.join(", "))?;
+                writeln!(
+                    f,
+                    "{}Aggregate(group_by=[{}], aggs=[{}])",
+                    indent,
+                    gb.join(", "),
+                    agg.join(", ")
+                )?;
                 input.fmt_indented(f, depth + 1)
             }
             LogicalPlan::Limit { limit, input } => {
@@ -125,7 +162,7 @@ impl fmt::Display for LogicalExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LogicalExpr::Column(table, col) => write!(f, "{}.{}", table, col),
-            LogicalExpr::Literal(lit)       => write!(f, "{}", lit),
+            LogicalExpr::Literal(lit) => write!(f, "{}", lit),
             LogicalExpr::BinaryOp { left, op, right } => {
                 write!(f, "({} {} {})", left, op, right)
             }
@@ -137,11 +174,11 @@ impl fmt::Display for LogicalExpr {
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LiteralValue::Int(i)   => write!(f, "{}", i),
+            LiteralValue::Int(i) => write!(f, "{}", i),
             LiteralValue::Float(v) => write!(f, "{}", v),
-            LiteralValue::Str(s)   => write!(f, "'{}'", s),
-            LiteralValue::Bool(b)  => write!(f, "{}", b),
-            LiteralValue::Null     => write!(f, "NULL"),
+            LiteralValue::Str(s) => write!(f, "'{}'", s),
+            LiteralValue::Bool(b) => write!(f, "{}", b),
+            LiteralValue::Null => write!(f, "NULL"),
         }
     }
 }
@@ -149,14 +186,14 @@ impl fmt::Display for LiteralValue {
 impl fmt::Display for BinaryOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            BinaryOp::Eq    => "=",
+            BinaryOp::Eq => "=",
             BinaryOp::NotEq => "!=",
-            BinaryOp::Lt    => "<",
-            BinaryOp::LtEq  => "<=",
-            BinaryOp::Gt    => ">",
-            BinaryOp::GtEq  => ">=",
-            BinaryOp::And   => "AND",
-            BinaryOp::Or    => "OR",
+            BinaryOp::Lt => "<",
+            BinaryOp::LtEq => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::GtEq => ">=",
+            BinaryOp::And => "AND",
+            BinaryOp::Or => "OR",
         };
         write!(f, "{}", s)
     }
@@ -166,10 +203,10 @@ impl fmt::Display for AggFunc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             AggFunc::Count => "COUNT",
-            AggFunc::Sum   => "SUM",
-            AggFunc::Avg   => "AVG",
-            AggFunc::Min   => "MIN",
-            AggFunc::Max   => "MAX",
+            AggFunc::Sum => "SUM",
+            AggFunc::Avg => "AVG",
+            AggFunc::Min => "MIN",
+            AggFunc::Max => "MAX",
         };
         write!(f, "{}", s)
     }

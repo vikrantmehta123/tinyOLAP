@@ -1,2 +1,3 @@
 pub mod logical_operators;
-mod lower;
+pub mod lower;
+pub mod optimizer;
