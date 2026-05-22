@@ -66,6 +66,7 @@ fn validate_select(select: &sqlparser::ast::Select) -> Result<(), String> {
         validate_where_expr(expr)?;
     }
 
+    // TODO: Validate whether all non-aggregate columns are in GROUP By clause or not.
     match &select.group_by {
         GroupByExpr::Expressions(exprs, _) => {
             for e in exprs {

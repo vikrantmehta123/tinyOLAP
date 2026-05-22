@@ -9,3 +9,4 @@ pub mod analyser;
 mod evaluator;
 pub mod catalog;
 pub mod frontend;
+pub mod logical_plan;

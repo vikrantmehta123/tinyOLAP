@@ -10,6 +10,7 @@ mod evaluator;
 mod processors;
 mod frontend;
 mod catalog;
+mod logical_plan;
 
 use std::path::PathBuf;
 use storage::schema::TableDef;
