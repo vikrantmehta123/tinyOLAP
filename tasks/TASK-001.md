@@ -134,7 +134,6 @@ Reject everything else with a descriptive error string:
 - `JOIN` of any kind
 - Multiple tables in FROM
 - Subqueries anywhere (in SELECT list, FROM, WHERE)
-- `HAVING`
 - `OFFSET`
 - `ORDER BY` (defer to later)
 - Any operator in WHERE other than: `=`, `!=`, `<`, `<=`, `>`, `>=`, `AND`, `OR`

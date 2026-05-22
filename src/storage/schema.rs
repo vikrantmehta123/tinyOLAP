@@ -39,6 +39,9 @@ impl DataType {
     }
 }
 
+// TODO: The following code needs to move to src/catalog/
+// The lifecycle of a table is handled there: create, remove, open, etc.
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnDef {

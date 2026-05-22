@@ -7,3 +7,5 @@ pub mod processors;
 pub mod storage;
 pub mod analyser;
 mod evaluator;
+pub mod catalog;
+pub mod frontend;

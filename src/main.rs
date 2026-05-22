@@ -9,6 +9,7 @@ mod analyser;
 mod evaluator;
 mod processors;
 mod frontend;
+mod catalog;
 
 use std::path::PathBuf;
 use storage::schema::TableDef;
