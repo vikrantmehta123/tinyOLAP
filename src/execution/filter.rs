@@ -1,0 +1,45 @@
+use arrow::array::RecordBatch;
+use arrow::compute::filter_record_batch;
+use std::boxed::Box;
+
+use crate::execution::executor::{ExecutionError, ExecutionPlan};
+use crate::execution::expr::evaluate_predicate;
+use crate::physical_plan::physical_operators::PhysicalExpr;
+
+pub struct FilterExec {
+    predicate: PhysicalExpr,
+    child: Box<dyn ExecutionPlan>,
+}
+
+impl FilterExec {
+    pub fn new(predicate: PhysicalExpr, child: Box<dyn ExecutionPlan>) -> Self {
+        Self { predicate, child }
+    }
+}
+
+impl ExecutionPlan for FilterExec {
+    fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
+        loop {
+            let batch = match self.child.next_batch()? {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
+
+            let mask = match evaluate_predicate(&self.predicate, &batch) {
+                Ok(m) => m,
+                Err(e) => return Some(Err(e)),
+            };
+
+            let filtered = match filter_record_batch(&batch, &mask) {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e.into())),
+            };
+            
+            // Skip empty batches — keep the non-empty contract for downstream.
+            if filtered.num_rows() > 0 {
+                return Some(Ok(filtered));
+            }
+            // else: this batch filtered to zero rows, pull the next one
+        }
+    }
+}
