@@ -1,4 +1,6 @@
 use std::fmt;
+
+#[derive(Clone)]
 pub enum LiteralValue {
     Int(i64),
     Float(f64),
