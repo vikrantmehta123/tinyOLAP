@@ -2,6 +2,9 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::os::unix::io::AsRawFd;
+use std::sync::Arc;
+
+use arrow::array::{ArrayRef, StringArray};
 
 use crate::encoding::StringCodec;
 use crate::storage::mark::{Mark, MarkReader};
@@ -84,7 +87,7 @@ impl StringColumnReader {
         Ok(out)
     }
 
-    pub fn read_all(&mut self) -> io::Result<Vec<String>> {
+    pub fn read_all(&mut self) -> io::Result<ArrayRef> {
         self.bin.seek(SeekFrom::Start(0))?;
         let mut file_bytes = Vec::new();
         self.bin.read_to_end(&mut file_bytes)?;
@@ -124,7 +127,7 @@ impl StringColumnReader {
             out.extend_from_slice(&decoded[start..end]);
         }
 
-        Ok(out)
+        Ok(Arc::new(StringArray::from(out)))
     }
 
 }
