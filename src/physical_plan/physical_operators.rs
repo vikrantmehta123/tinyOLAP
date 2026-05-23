@@ -79,3 +79,140 @@ pub enum PhysicalPlan {
         input: Box<PhysicalPlan>,
     },
 }
+
+
+impl PhysicalPlan {
+    pub fn children(&self) -> Vec<&PhysicalPlan> {
+        match self {
+            PhysicalPlan::Scan { .. }         => vec![],
+            PhysicalPlan::FullScan { .. }     => vec![],
+            PhysicalPlan::ZoneMapScan { .. }  => vec![],
+            PhysicalPlan::Filter { input, .. }    => vec![input],
+            PhysicalPlan::Project { input, .. }   => vec![input],
+            PhysicalPlan::Aggregate { input, .. } => vec![input],
+            PhysicalPlan::Limit { input, .. }     => vec![input],
+        }
+    }
+
+    pub fn with_new_children(self, mut new_children: Vec<PhysicalPlan>) -> PhysicalPlan {
+        match self {
+            PhysicalPlan::Scan { .. }        => self,
+            PhysicalPlan::FullScan { .. }    => self,
+            PhysicalPlan::ZoneMapScan { .. } => self,
+            PhysicalPlan::Filter { predicate, .. } => PhysicalPlan::Filter {
+                predicate,
+                input: Box::new(new_children.remove(0)),
+            },
+            PhysicalPlan::Project { projections, .. } => PhysicalPlan::Project {
+                projections,
+                input: Box::new(new_children.remove(0)),
+            },
+            PhysicalPlan::Aggregate { group_by, aggregates, .. } => PhysicalPlan::Aggregate {
+                group_by,
+                aggregates,
+                input: Box::new(new_children.remove(0)),
+            },
+            PhysicalPlan::Limit { limit, .. } => PhysicalPlan::Limit {
+                limit,
+                input: Box::new(new_children.remove(0)),
+            },
+        }
+    }
+}
+
+use std::fmt;
+
+impl fmt::Display for LiteralValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LiteralValue::Int(i)   => write!(f, "{}", i),
+            LiteralValue::Float(v) => write!(f, "{}", v),
+            LiteralValue::Str(s)   => write!(f, "'{}'", s),
+            LiteralValue::Bool(b)  => write!(f, "{}", b),
+            LiteralValue::Null     => write!(f, "NULL"),
+        }
+    }
+}
+
+impl fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            BinaryOp::Eq    => "=",
+            BinaryOp::NotEq => "!=",
+            BinaryOp::Lt    => "<",
+            BinaryOp::LtEq  => "<=",
+            BinaryOp::Gt    => ">",
+            BinaryOp::GtEq  => ">=",
+            BinaryOp::And   => "AND",
+            BinaryOp::Or    => "OR",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl fmt::Display for AggFunc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            AggFunc::Count => "COUNT",
+            AggFunc::Sum   => "SUM",
+            AggFunc::Avg   => "AVG",
+            AggFunc::Min   => "MIN",
+            AggFunc::Max   => "MAX",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl fmt::Display for PhysicalExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PhysicalExpr::Column(col)              => write!(f, "{}", col),
+            PhysicalExpr::Literal(lit)             => write!(f, "{}", lit),
+            PhysicalExpr::BinaryOp { left, op, right } => {
+                write!(f, "({} {} {})", left, op, right)
+            }
+        }
+    }
+}
+
+impl fmt::Display for PhysicalPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_indented(f, 0)
+    }
+}
+
+impl PhysicalPlan {
+    fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+        let indent = "  ".repeat(depth);
+        match self {
+            PhysicalPlan::Scan { table, columns } => {
+                writeln!(f, "{}Scan({}, cols=[{}])", indent, table, columns.join(", "))
+            }
+            PhysicalPlan::FullScan { table, columns } => {
+                writeln!(f, "{}FullScan({}, cols=[{}])", indent, table, columns.join(", "))
+            }
+            PhysicalPlan::ZoneMapScan { table, columns, predicate } => {
+                writeln!(f, "{}ZoneMapScan({}, cols=[{}], predicate={})", indent, table, columns.join(", "), predicate)
+            }
+            PhysicalPlan::Filter { predicate, input } => {
+                writeln!(f, "{}Filter({})", indent, predicate)?;
+                input.fmt_indented(f, depth + 1)
+            }
+            PhysicalPlan::Project { projections, input } => {
+                let cols: Vec<String> = projections.iter().map(|e| e.to_string()).collect();
+                writeln!(f, "{}Project({})", indent, cols.join(", "))?;
+                input.fmt_indented(f, depth + 1)
+            }
+            PhysicalPlan::Aggregate { group_by, aggregates, input } => {
+                let gb: Vec<String>  = group_by.iter().map(|e| e.to_string()).collect();
+                let agg: Vec<String> = aggregates.iter().map(|a| format!("{}({}) -> {}", a.func, a.arg, a.output_name)).collect();
+                writeln!(f, "{}HashAggregate(group_by=[{}], aggs=[{}])", indent, gb.join(", "), agg.join(", "))?;
+                input.fmt_indented(f, depth + 1)
+            }
+            PhysicalPlan::Limit { limit, input } => {
+                writeln!(f, "{}Limit({})", indent, limit)?;
+                input.fmt_indented(f, depth + 1)
+            }
+        }
+    }
+}
