@@ -11,6 +11,7 @@ mod processors;
 mod frontend;
 mod catalog;
 mod logical_plan;
+mod physical_plan;
 
 use std::path::PathBuf;
 use storage::schema::TableDef;
