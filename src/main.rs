@@ -6,6 +6,7 @@ mod frontend;
 mod logical_plan;
 mod physical_plan;
 mod storage;
+mod execution;
 
 use std::path::PathBuf;
 use catalog::schema::TableSchema;
