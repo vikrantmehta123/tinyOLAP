@@ -14,7 +14,7 @@ use crate::{
     execution::executor::{ExecutionError, ExecutionPlan}, storage::{column_reader::ColumnReader, string_column_reader::StringColumnReader},
 };
 
-struct FullScanExec {
+pub struct FullScanExec {
     parts: Vec<PathBuf>,        // remaining part directories, popped from the back
     columns: Vec<ColumnSchema>, // which columns to read, in output order
     schema: Arc<arrow::datatypes::Schema>, // Arrow schema cached once for reuse
