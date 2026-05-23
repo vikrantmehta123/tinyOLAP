@@ -61,9 +61,9 @@ impl OptimizerRule for PredicatePushdown {
             PhysicalPlan::Filter {
                 predicate,
                 input,
-            } if matches!(*input, PhysicalPlan::Scan { .. }) => {
+            } if matches!(*input, PhysicalPlan::FullScan { .. }) => {
                 match *input {
-                    PhysicalPlan::Scan { table, columns } => {
+                    PhysicalPlan::FullScan { table, columns } => {
                         PhysicalPlan::ZoneMapScan { table, columns, predicate }
                     }
                     other => PhysicalPlan::Filter { predicate, input: Box::new(other) },
@@ -95,14 +95,14 @@ impl OptimizerRule for EliminateTrueFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::physical_operators::{AggFunc, AggSpec, BinaryOp, LiteralValue, PhysicalExpr, PhysicalPlan};
+    use crate::physical_plan::physical_operators::{AggFunc, AggSpec, CmpOp, LiteralValue, PhysicalExpr, PhysicalPlan};
 
     fn col(name: &str) -> PhysicalExpr {
         PhysicalExpr::Column(name.to_string())
     }
 
     fn scan(table: &str, columns: Vec<&str>) -> PhysicalPlan {
-        PhysicalPlan::Scan {
+        PhysicalPlan::FullScan {
             table: table.to_string(),
             columns: columns.into_iter().map(|s| s.to_string()).collect(),
         }
@@ -111,9 +111,9 @@ mod tests {
     // Filter + Scan → ZoneMapScan
     #[test]
     fn test_predicate_pushdown() {
-        let predicate = PhysicalExpr::BinaryOp {
+        let predicate = PhysicalExpr::Compare {
             left: Box::new(col("age")),
-            op: BinaryOp::Gt,
+            op: CmpOp::Gt,
             right: Box::new(PhysicalExpr::Literal(LiteralValue::Int(30))),
         };
 
@@ -130,11 +130,11 @@ mod tests {
                 assert_eq!(table, "users");
                 assert_eq!(columns, vec!["age", "name"]);
                 match predicate {
-                    PhysicalExpr::BinaryOp { left, op, right } => {
+                    PhysicalExpr::Compare { left, op, right } => {
                         match (*left, op, *right) {
                             (
                                 PhysicalExpr::Column(col),
-                                BinaryOp::Gt,
+                                CmpOp::Gt,
                                 PhysicalExpr::Literal(LiteralValue::Int(30)),
                             ) => assert_eq!(col, "age"),
                             _ => panic!("unexpected predicate shape"),
@@ -159,7 +159,7 @@ mod tests {
         println!("{}", optimized);
 
         match optimized {
-            PhysicalPlan::Scan { .. } => {}
+            PhysicalPlan::FullScan { .. } => {}
             _ => panic!("expected Filter to be eliminated, leaving Scan"),
         }
     }
@@ -168,9 +168,9 @@ mod tests {
     #[test]
     fn test_no_pushdown_over_aggregate() {
         let plan = PhysicalPlan::Filter {
-            predicate: PhysicalExpr::BinaryOp {
+            predicate: PhysicalExpr::Compare {
                 left: Box::new(col("age")),
-                op: BinaryOp::Gt,
+                op: CmpOp::Gt,
                 right: Box::new(PhysicalExpr::Literal(LiteralValue::Int(30))),
             },
             input: Box::new(PhysicalPlan::Aggregate {

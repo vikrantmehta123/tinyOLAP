@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 
-
 use crate::logical_plan::logical_operators::{
-    AggFunc as LogAggFunc, BinaryOp as LogBinaryOp, LiteralValue as LogLiteralValue,
-    LogicalExpr, LogicalPlan,
+    AggFunc as LogAggFunc, BinaryOp as LogBinaryOp, LiteralValue as LogLiteralValue, LogicalExpr,
+    LogicalPlan,
 };
 use crate::physical_plan::physical_operators::{
-    AggFunc as PhysAggFunc, AggSpec, BinaryOp as PhysBinaryOp, LiteralValue as PhysLiteralValue, PhysicalExpr, PhysicalPlan,
+    AggFunc as PhysAggFunc, AggSpec, CmpOp, LiteralValue as PhysLiteralValue, LogicalOp,
+    PhysicalExpr, PhysicalPlan,
 };
 
 pub fn lower(plan: LogicalPlan) -> PhysicalPlan {
@@ -60,7 +60,7 @@ fn collect_expr_columns(expr: &LogicalExpr, cols: &mut BTreeSet<String>) {
 
 fn lower_plan(plan: LogicalPlan, cols: &BTreeSet<String>) -> PhysicalPlan {
     match plan {
-        LogicalPlan::Scan { table } => PhysicalPlan::Scan {
+        LogicalPlan::Scan { table } => PhysicalPlan::FullScan {
             table,
             columns: cols.iter().cloned().collect(),
         },
@@ -72,27 +72,73 @@ fn lower_plan(plan: LogicalPlan, cols: &BTreeSet<String>) -> PhysicalPlan {
             projections: projections.into_iter().map(lower_expr).collect(),
             input: Box::new(lower_plan(*input, cols)),
         },
-        LogicalPlan::Aggregate { group_by, aggregates, input } =>  PhysicalPlan::Aggregate {
+        LogicalPlan::Aggregate {
+            group_by,
+            aggregates,
+            input,
+        } => PhysicalPlan::Aggregate {
             group_by: group_by.into_iter().map(lower_expr).collect(),
             aggregates: aggregates.into_iter().map(lower_agg_spec).collect(),
-            input: Box::new(lower_plan(*input, cols)),   
-        }, 
-        LogicalPlan::Limit { limit, input } => PhysicalPlan::Limit { 
-            limit, 
             input: Box::new(lower_plan(*input, cols)),
-        }
+        },
+        LogicalPlan::Limit { limit, input } => PhysicalPlan::Limit {
+            limit,
+            input: Box::new(lower_plan(*input, cols)),
+        },
     }
 }
 
 fn lower_expr(expr: LogicalExpr) -> PhysicalExpr {
     match expr {
-        LogicalExpr::Column(_,  col) => PhysicalExpr::Column(col), 
-        LogicalExpr::Literal(lit) => PhysicalExpr::Literal(lower_literal(lit)), 
-        LogicalExpr::BinaryOp { left, op, right } => PhysicalExpr::BinaryOp { 
-            left: Box::new(lower_expr(*left)),
-            op: lower_binary_op(op), 
-            right: Box::new(lower_expr(*right)),
-        }, 
+        LogicalExpr::Column(_, col) => PhysicalExpr::Column(col),
+        LogicalExpr::Literal(lit) => PhysicalExpr::Literal(lower_literal(lit)),
+        LogicalExpr::BinaryOp { left, op, right } => {
+            let left = Box::new(lower_expr(*left));
+            let right = Box::new(lower_expr(*right));
+            match op {
+                LogBinaryOp::Eq => PhysicalExpr::Compare {
+                    left,
+                    op: CmpOp::Eq,
+                    right,
+                },
+                LogBinaryOp::NotEq => PhysicalExpr::Compare {
+                    left,
+                    op: CmpOp::NotEq,
+                    right,
+                },
+                LogBinaryOp::Lt => PhysicalExpr::Compare {
+                    left,
+                    op: CmpOp::Lt,
+                    right,
+                },
+                LogBinaryOp::LtEq => PhysicalExpr::Compare {
+                    left,
+                    op: CmpOp::LtEq,
+                    right,
+                },
+                LogBinaryOp::Gt => PhysicalExpr::Compare {
+                    left,
+                    op: CmpOp::Gt,
+                    right,
+                },
+                LogBinaryOp::GtEq => PhysicalExpr::Compare {
+                    left,
+                    op: CmpOp::GtEq,
+                    right,
+                },
+                LogBinaryOp::And => PhysicalExpr::Logical {
+                    left,
+                    op: LogicalOp::And,
+                    right,
+                },
+                LogBinaryOp::Or => PhysicalExpr::Logical {
+                    left,
+                    op: LogicalOp::Or,
+                    right,
+                },
+            }
+        }
+
         LogicalExpr::Aggregate { func, arg } => {
             PhysicalExpr::Column(format!("{}({})", agg_func_name(&func), expr_display(&arg)))
         }
@@ -116,61 +162,47 @@ fn lower_agg_spec(expr: LogicalExpr) -> AggSpec {
 fn lower_agg_func(func: LogAggFunc) -> crate::physical_plan::physical_operators::AggFunc {
     match func {
         LogAggFunc::Count => PhysAggFunc::Count,
-        LogAggFunc::Sum   => PhysAggFunc::Sum,
-        LogAggFunc::Avg   => PhysAggFunc::Avg,
-        LogAggFunc::Min   => PhysAggFunc::Min,
-        LogAggFunc::Max   => PhysAggFunc::Max,
-    }
-}
-
-fn lower_binary_op(op: LogBinaryOp) -> crate::physical_plan::physical_operators::BinaryOp {
-    match op {
-        LogBinaryOp::Eq    => PhysBinaryOp::Eq,
-        LogBinaryOp::NotEq => PhysBinaryOp::NotEq,
-        LogBinaryOp::Lt    => PhysBinaryOp::Lt,
-        LogBinaryOp::LtEq  => PhysBinaryOp::LtEq,
-        LogBinaryOp::Gt    => PhysBinaryOp::Gt,
-        LogBinaryOp::GtEq  => PhysBinaryOp::GtEq,
-        LogBinaryOp::And   => PhysBinaryOp::And,
-        LogBinaryOp::Or    => PhysBinaryOp::Or,
+        LogAggFunc::Sum => PhysAggFunc::Sum,
+        LogAggFunc::Avg => PhysAggFunc::Avg,
+        LogAggFunc::Min => PhysAggFunc::Min,
+        LogAggFunc::Max => PhysAggFunc::Max,
     }
 }
 
 fn lower_literal(lit: LogLiteralValue) -> crate::physical_plan::physical_operators::LiteralValue {
     match lit {
-        LogLiteralValue::Int(n)   => PhysLiteralValue::Int(n),
+        LogLiteralValue::Int(n) => PhysLiteralValue::Int(n),
         LogLiteralValue::Float(f) => PhysLiteralValue::Float(f),
-        LogLiteralValue::Str(s)   => PhysLiteralValue::Str(s),
-        LogLiteralValue::Bool(b)  => PhysLiteralValue::Bool(b),
-        LogLiteralValue::Null     => PhysLiteralValue::Null,
+        LogLiteralValue::Str(s) => PhysLiteralValue::Str(s),
+        LogLiteralValue::Bool(b) => PhysLiteralValue::Bool(b),
+        LogLiteralValue::Null => PhysLiteralValue::Null,
     }
 }
 
 fn agg_func_name(func: &LogAggFunc) -> &'static str {
     match func {
         LogAggFunc::Count => "count",
-        LogAggFunc::Sum   => "sum",
-        LogAggFunc::Avg   => "avg",
-        LogAggFunc::Min   => "min",
-        LogAggFunc::Max   => "max",
+        LogAggFunc::Sum => "sum",
+        LogAggFunc::Avg => "avg",
+        LogAggFunc::Min => "min",
+        LogAggFunc::Max => "max",
     }
 }
 
 fn expr_display(expr: &LogicalExpr) -> String {
     match expr {
-        LogicalExpr::Column(_, col)                  => col.clone(),
-        LogicalExpr::Literal(LogLiteralValue::Int(n))   => n.to_string(),
+        LogicalExpr::Column(_, col) => col.clone(),
+        LogicalExpr::Literal(LogLiteralValue::Int(n)) => n.to_string(),
         LogicalExpr::Literal(LogLiteralValue::Float(f)) => f.to_string(),
-        LogicalExpr::Literal(LogLiteralValue::Str(s))   => s.clone(),
-        LogicalExpr::Literal(LogLiteralValue::Bool(b))  => b.to_string(),
-        LogicalExpr::Literal(LogLiteralValue::Null)      => "null".to_string(),
-        LogicalExpr::BinaryOp { .. }                 => "<expr>".to_string(),
-        LogicalExpr::Aggregate { func, arg }         => {
+        LogicalExpr::Literal(LogLiteralValue::Str(s)) => s.clone(),
+        LogicalExpr::Literal(LogLiteralValue::Bool(b)) => b.to_string(),
+        LogicalExpr::Literal(LogLiteralValue::Null) => "null".to_string(),
+        LogicalExpr::BinaryOp { .. } => "<expr>".to_string(),
+        LogicalExpr::Aggregate { func, arg } => {
             format!("{}({})", agg_func_name(func), expr_display(arg))
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -179,7 +211,9 @@ mod tests {
         AggFunc as LogAggFunc, BinaryOp as LogBinaryOp, LiteralValue as LogLiteralValue,
         LogicalExpr, LogicalPlan,
     };
-    use crate::physical_plan::physical_operators::{AggFunc, BinaryOp, LiteralValue, PhysicalExpr, PhysicalPlan};
+    use crate::physical_plan::physical_operators::{
+        AggFunc, CmpOp, LiteralValue, PhysicalExpr, PhysicalPlan,
+    };
 
     fn col(table: &str, name: &str) -> LogicalExpr {
         LogicalExpr::Column(table.to_string(), name.to_string())
@@ -191,14 +225,16 @@ mod tests {
     fn test_column_pruning() {
         let plan = LogicalPlan::Project {
             projections: vec![col("users", "name")],
-            input: Box::new(LogicalPlan::Scan { table: "users".to_string() }),
+            input: Box::new(LogicalPlan::Scan {
+                table: "users".to_string(),
+            }),
         };
 
         let physical = lower(plan);
 
         match physical {
             PhysicalPlan::Project { input, .. } => match *input {
-                PhysicalPlan::Scan { table, columns } => {
+                PhysicalPlan::FullScan { table, columns } => {
                     assert_eq!(table, "users");
                     assert_eq!(columns, vec!["name"]);
                 }
@@ -220,7 +256,9 @@ mod tests {
                     op: LogBinaryOp::Gt,
                     right: Box::new(LogicalExpr::Literal(LogLiteralValue::Int(30))),
                 },
-                input: Box::new(LogicalPlan::Scan { table: "users".to_string() }),
+                input: Box::new(LogicalPlan::Scan {
+                    table: "users".to_string(),
+                }),
             }),
         };
 
@@ -230,20 +268,18 @@ mod tests {
             PhysicalPlan::Project { input, .. } => match *input {
                 PhysicalPlan::Filter { predicate, input } => {
                     match predicate {
-                        PhysicalExpr::BinaryOp { left, op, right } => {
-                            match (*left, op, *right) {
-                                (
-                                    PhysicalExpr::Column(col),
-                                    BinaryOp::Gt,
-                                    PhysicalExpr::Literal(LiteralValue::Int(30)),
-                                ) => assert_eq!(col, "age"),
-                                _ => panic!("unexpected predicate shape"),
-                            }
-                        }
+                        PhysicalExpr::Compare { left, op, right } => match (*left, op, *right) {
+                            (
+                                PhysicalExpr::Column(col),
+                                CmpOp::Gt,
+                                PhysicalExpr::Literal(LiteralValue::Int(30)),
+                            ) => assert_eq!(col, "age"),
+                            _ => panic!("unexpected predicate shape"),
+                        },
                         _ => panic!("expected BinaryOp predicate"),
                     }
                     match *input {
-                        PhysicalPlan::Scan { mut columns, .. } => {
+                        PhysicalPlan::FullScan { mut columns, .. } => {
                             columns.sort();
                             assert_eq!(columns, vec!["age", "name"]);
                         }
@@ -271,7 +307,9 @@ mod tests {
             input: Box::new(LogicalPlan::Aggregate {
                 group_by: vec![col("users", "name")],
                 aggregates: vec![agg_expr()],
-                input: Box::new(LogicalPlan::Scan { table: "users".to_string() }),
+                input: Box::new(LogicalPlan::Scan {
+                    table: "users".to_string(),
+                }),
             }),
         };
 
@@ -291,7 +329,11 @@ mod tests {
                 }
 
                 match *input {
-                    PhysicalPlan::Aggregate { group_by, aggregates, input } => {
+                    PhysicalPlan::Aggregate {
+                        group_by,
+                        aggregates,
+                        input,
+                    } => {
                         assert_eq!(group_by.len(), 1);
                         match &group_by[0] {
                             PhysicalExpr::Column(c) => assert_eq!(c, "name"),
@@ -310,7 +352,7 @@ mod tests {
                         }
 
                         match *input {
-                            PhysicalPlan::Scan { mut columns, .. } => {
+                            PhysicalPlan::FullScan { mut columns, .. } => {
                                 columns.sort();
                                 assert_eq!(columns, vec!["age", "name"]);
                             }
@@ -332,7 +374,9 @@ mod tests {
             limit: 5,
             input: Box::new(LogicalPlan::Project {
                 projections: vec![col("users", "name")],
-                input: Box::new(LogicalPlan::Scan { table: "users".to_string() }),
+                input: Box::new(LogicalPlan::Scan {
+                    table: "users".to_string(),
+                }),
             }),
         };
 

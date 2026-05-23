@@ -1,3 +1,4 @@
+use std::fmt;
 pub enum LiteralValue {
     Int(i64),
     Float(f64),
@@ -6,13 +7,16 @@ pub enum LiteralValue {
     Null,
 }
 
-pub enum BinaryOp {
+pub enum CmpOp {
     Eq,
     NotEq,
     Lt,
     LtEq,
     Gt,
     GtEq,
+}
+
+pub enum LogicalOp {
     And,
     Or,
 }
@@ -34,9 +38,14 @@ pub enum AggFunc {
 pub enum PhysicalExpr {
     Column(String),
     Literal(LiteralValue),
-    BinaryOp {
+    Compare {
+        left: Box<PhysicalExpr>, 
+        op: CmpOp, 
+        right: Box<PhysicalExpr>,
+    },
+    Logical {
         left: Box<PhysicalExpr>,
-        op: BinaryOp,
+        op: LogicalOp,
         right: Box<PhysicalExpr>,
     },
 }
@@ -48,10 +57,6 @@ pub struct AggSpec {
 }
 
 pub enum PhysicalPlan {
-    Scan {
-        table: String,
-        columns: Vec<String>,
-    },
     FullScan {
         table: String,
         columns: Vec<String>,
@@ -84,7 +89,6 @@ pub enum PhysicalPlan {
 impl PhysicalPlan {
     pub fn children(&self) -> Vec<&PhysicalPlan> {
         match self {
-            PhysicalPlan::Scan { .. }         => vec![],
             PhysicalPlan::FullScan { .. }     => vec![],
             PhysicalPlan::ZoneMapScan { .. }  => vec![],
             PhysicalPlan::Filter { input, .. }    => vec![input],
@@ -96,7 +100,6 @@ impl PhysicalPlan {
 
     pub fn with_new_children(self, mut new_children: Vec<PhysicalPlan>) -> PhysicalPlan {
         match self {
-            PhysicalPlan::Scan { .. }        => self,
             PhysicalPlan::FullScan { .. }    => self,
             PhysicalPlan::ZoneMapScan { .. } => self,
             PhysicalPlan::Filter { predicate, .. } => PhysicalPlan::Filter {
@@ -120,8 +123,6 @@ impl PhysicalPlan {
     }
 }
 
-use std::fmt;
-
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -134,17 +135,25 @@ impl fmt::Display for LiteralValue {
     }
 }
 
-impl fmt::Display for BinaryOp {
+impl fmt::Display for CmpOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            BinaryOp::Eq    => "=",
-            BinaryOp::NotEq => "!=",
-            BinaryOp::Lt    => "<",
-            BinaryOp::LtEq  => "<=",
-            BinaryOp::Gt    => ">",
-            BinaryOp::GtEq  => ">=",
-            BinaryOp::And   => "AND",
-            BinaryOp::Or    => "OR",
+            CmpOp::Eq    => "=",
+            CmpOp::NotEq => "!=",
+            CmpOp::Lt    => "<",
+            CmpOp::LtEq  => "<=",
+            CmpOp::Gt    => ">",
+            CmpOp::GtEq  => ">=",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl fmt::Display for LogicalOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            LogicalOp::And    => "AND",
+            LogicalOp::Or     => "OR",
         };
         write!(f, "{}", s)
     }
@@ -168,7 +177,10 @@ impl fmt::Display for PhysicalExpr {
         match self {
             PhysicalExpr::Column(col)              => write!(f, "{}", col),
             PhysicalExpr::Literal(lit)             => write!(f, "{}", lit),
-            PhysicalExpr::BinaryOp { left, op, right } => {
+            PhysicalExpr::Compare { left, op, right } => {
+                write!(f, "({} {} {})", left, op, right)
+            }
+            PhysicalExpr::Logical { left, op, right } => {
                 write!(f, "({} {} {})", left, op, right)
             }
         }
@@ -185,9 +197,6 @@ impl PhysicalPlan {
     fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
         let indent = "  ".repeat(depth);
         match self {
-            PhysicalPlan::Scan { table, columns } => {
-                writeln!(f, "{}Scan({}, cols=[{}])", indent, table, columns.join(", "))
-            }
             PhysicalPlan::FullScan { table, columns } => {
                 writeln!(f, "{}FullScan({}, cols=[{}])", indent, table, columns.join(", "))
             }
