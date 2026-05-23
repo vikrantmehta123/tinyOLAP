@@ -244,6 +244,7 @@ mod tests {
                 ColumnSchema { name: "name".to_string(), data_type: DataType::Str },
                 ColumnSchema { name: "age".to_string(),  data_type: DataType::I32 },
             ],
+            sort_key: vec![0]
         }
     }
 

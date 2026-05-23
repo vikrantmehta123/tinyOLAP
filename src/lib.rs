@@ -1,12 +1,6 @@
-pub mod aggregator;
 pub mod config;
 pub mod encoding;
-pub mod executor;
-pub mod parser;
-pub mod processors;
 pub mod storage;
-pub mod analyser;
-mod evaluator;
 pub mod catalog;
 pub mod frontend;
 pub mod logical_plan;
