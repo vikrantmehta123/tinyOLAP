@@ -3,8 +3,11 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::os::unix::io::AsRawFd;
 
+use arrow::array::ArrayRef;
+
 use crate::encoding::{Codec, Primitive};
 use crate::storage::mark::{Mark, MarkReader};
+use crate::storage::arrow_mapping::{ArrowMappable};
 
 pub struct ColumnReader {
     bin: File,
@@ -100,7 +103,7 @@ impl ColumnReader {
         Ok(out)
     }
 
-    pub fn read_all<T: Primitive>(&mut self) -> io::Result<Vec<T>> {
+    pub fn read_all<T: Primitive + ArrowMappable>(&mut self) -> io::Result<ArrayRef> {
         self.bin.seek(SeekFrom::Start(0))?;
         let mut file_bytes = Vec::new();
         self.bin.read_to_end(&mut file_bytes)?;
@@ -140,8 +143,6 @@ impl ColumnReader {
             out.extend(decoded[start..end].chunks_exact(T::WIDTH).map(T::decode_le));
         }
 
-        Ok(out)
+        Ok(T::into_array(out))
     }
-
-
 }
