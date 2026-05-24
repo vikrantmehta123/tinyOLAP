@@ -7,11 +7,13 @@ mod frontend;
 mod logical_plan;
 mod physical_plan;
 mod storage;
+mod dml;
 
 use arrow::array::RecordBatch;
 use catalog::schema::TableSchema;
 use frontend::parser::Statement;
 use std::path::{Path, PathBuf};
+use storage::table_writer::TableWriter;
 
 use crate::{
     execution::builder::build,
@@ -23,33 +25,58 @@ fn run_sql(sql: &str, schema: &TableSchema, table_dir: &Path) -> Result<(), Stri
     validate(&stmt)?;
     analyze(&stmt, schema)?;
 
-    if matches!(stmt, Statement::Insert { .. }) {
-        return Err("INSERT not yet wired in the new pipeline".into());
+    // Dispatch on statement kind. INSERT and SELECT take very different paths
+    // — INSERT skips planning entirely (just build a RecordBatch and hand it
+    // to the writer).
+    if matches!(stmt, Statement::Insert(_)) {
+        return run_insert(&stmt, schema, table_dir);
     }
+    run_select(&stmt, schema, table_dir)
+}
 
-    let mut logical_plan = logical_plan::lower::lower(&stmt, schema)?;
+fn run_insert(
+    stmt: &Statement,
+    schema: &TableSchema,
+    table_dir: &Path,
+) -> Result<(), String> {
+    let batch = dml::insert_builder::build_record_batch(stmt, schema)?;
+
+    let writer = TableWriter::open(table_dir.to_path_buf())
+        .map_err(|e| e.to_string())?;
+    let meta = writer.insert(batch).map_err(|e| e.to_string())?;
+
+    println!("OK ({} rows inserted, part_{:05})", meta.rows, meta.part_id);
+    Ok(())
+}
+
+fn run_select(
+    stmt: &Statement,
+    schema: &TableSchema,
+    table_dir: &Path,
+) -> Result<(), String> {
+    let mut logical_plan = logical_plan::lower::lower(stmt, schema)?;
     logical_plan = logical_plan::optimizer::Optimizer::new().optimize(logical_plan);
 
     let physical_plan = physical_plan::lower::lower(logical_plan);
-    // TODO(TASK-004): re-enable physical optimizer once ZoneMapScanExec lands
+    // TODO(TASK-004): re-enable physical optimizer once ZoneMapScanExec lands.
 
-    let mut plan = build(physical_plan, schema, table_dir).map_err(|e| e.to_string())?;
+    let mut plan = build(physical_plan, schema, table_dir)
+        .map_err(|e| e.to_string())?;
+
     let mut batches: Vec<RecordBatch> = Vec::new();
     loop {
         match plan.next_batch() {
-            None => break,
-            Some(Ok(batch)) => batches.push(batch),
-            Some(Err(e)) => return Err(e.to_string()),
+            None             => break,
+            Some(Ok(batch))  => batches.push(batch),
+            Some(Err(e))     => return Err(e.to_string()),
         }
     }
 
-    // 11. Pretty-print. Arrow's print_batches gives us a tidy ASCII table.
     if batches.is_empty() {
         println!("(0 rows)");
     } else {
         arrow::util::pretty::print_batches(&batches).map_err(|e| e.to_string())?;
     }
-
     Ok(())
 }
 

@@ -7,9 +7,16 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DataType {
-    I8, I16, I32, I64,
-    U8, U16, U32, U64,
-    F32, F64,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    F32,
+    F64,
     Bool,
     Str,
 }
@@ -19,18 +26,36 @@ impl DataType {
     /// type-erased on-disk structures. Values must not change once written.
     pub fn type_tag(&self) -> u8 {
         match self {
-            DataType::I8   => 1,
-            DataType::I16  => 2,
-            DataType::I32  => 3,
-            DataType::I64  => 4,
-            DataType::U8   => 5,
-            DataType::U16  => 6,
-            DataType::U32  => 7,
-            DataType::U64  => 8,
-            DataType::F32  => 9,
-            DataType::F64  => 10,
+            DataType::I8 => 1,
+            DataType::I16 => 2,
+            DataType::I32 => 3,
+            DataType::I64 => 4,
+            DataType::U8 => 5,
+            DataType::U16 => 6,
+            DataType::U32 => 7,
+            DataType::U64 => 8,
+            DataType::F32 => 9,
+            DataType::F64 => 10,
             DataType::Bool => 11,
-            DataType::Str  => 12,
+            DataType::Str => 12,
+        }
+    }
+
+    pub fn to_arrow(&self) -> arrow::datatypes::DataType {
+        use arrow::datatypes::DataType as ArrowDt;
+        match self {
+            DataType::I8 => ArrowDt::Int8,
+            DataType::I16 => ArrowDt::Int16,
+            DataType::I32 => ArrowDt::Int32,
+            DataType::I64 => ArrowDt::Int64,
+            DataType::U8 => ArrowDt::UInt8,
+            DataType::U16 => ArrowDt::UInt16,
+            DataType::U32 => ArrowDt::UInt32,
+            DataType::U64 => ArrowDt::UInt64,
+            DataType::F32 => ArrowDt::Float32,
+            DataType::F64 => ArrowDt::Float64,
+            DataType::Bool => ArrowDt::Boolean,
+            DataType::Str => ArrowDt::Utf8,
         }
     }
 }
@@ -81,10 +106,22 @@ mod tests {
         let def = TableSchema {
             name: "events".to_string(),
             columns: vec![
-                ColumnSchema { name: "timestamp".to_string(), data_type: DataType::I64 },
-                ColumnSchema { name: "user_id".to_string(),   data_type: DataType::U32 },
-                ColumnSchema { name: "is_active".to_string(), data_type: DataType::Bool },
-                ColumnSchema { name: "label".to_string(),     data_type: DataType::Str },
+                ColumnSchema {
+                    name: "timestamp".to_string(),
+                    data_type: DataType::I64,
+                },
+                ColumnSchema {
+                    name: "user_id".to_string(),
+                    data_type: DataType::U32,
+                },
+                ColumnSchema {
+                    name: "is_active".to_string(),
+                    data_type: DataType::Bool,
+                },
+                ColumnSchema {
+                    name: "label".to_string(),
+                    data_type: DataType::Str,
+                },
             ],
             sort_key: vec![0, 1],
         };

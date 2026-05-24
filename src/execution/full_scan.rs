@@ -56,7 +56,7 @@ impl FullScanExec {
         //    scan emits shares this exact Arc<Schema> — no per-batch alloc.
         let fields: Vec<Field> = columns
             .iter()
-            .map(|c| Field::new(&c.name, to_arrow_dt(&c.data_type), false))
+            .map(|c| Field::new(&c.name, c.data_type.to_arrow(), false))
             .collect();
         let schema = Arc::new(Schema::new(fields));
 
@@ -95,24 +95,6 @@ impl FullScanExec {
     }
 }
 
-// TODO: Find a better place to move this function
-fn to_arrow_dt(dt: &DataType) -> arrow::datatypes::DataType {
-    use arrow::datatypes::DataType as ArrowDt;
-    match dt {
-        DataType::I8 => ArrowDt::Int8,
-        DataType::I16 => ArrowDt::Int16,
-        DataType::I32 => ArrowDt::Int32,
-        DataType::I64 => ArrowDt::Int64,
-        DataType::U8 => ArrowDt::UInt8,
-        DataType::U16 => ArrowDt::UInt16,
-        DataType::U32 => ArrowDt::UInt32,
-        DataType::U64 => ArrowDt::UInt64,
-        DataType::F32 => ArrowDt::Float32,
-        DataType::F64 => ArrowDt::Float64,
-        DataType::Bool => ArrowDt::Boolean,
-        DataType::Str => ArrowDt::Utf8,
-    }
-}
 
 impl ExecutionPlan for FullScanExec {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
