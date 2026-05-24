@@ -1,6 +1,7 @@
 use arrow::array::RecordBatch;
 use arrow::compute::filter_record_batch;
 use std::boxed::Box;
+use std::fmt;
 
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::execution::expr::evaluate_predicate;
@@ -41,5 +42,19 @@ impl ExecutionPlan for FilterExec {
             }
             // else: this batch filtered to zero rows, pull the next one
         }
+    }
+
+    fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+        let indent = "  ".repeat(depth);
+        writeln!(f, "{}Filter({})", indent, self.predicate)?;
+        self.child.fmt_indented(f, depth + 1)
+    }
+
+}
+
+
+impl fmt::Display for FilterExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_indented(f, 0)
     }
 }

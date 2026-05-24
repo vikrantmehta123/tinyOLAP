@@ -1,15 +1,16 @@
+use std::fmt;
 use arrow::array::RecordBatch;
 
 #[derive(Debug)]
 pub enum ExecutionError {
     Io(std::io::Error),
     InvalidData(String),
-    Arrow(arrow::error::ArrowError)
+    Arrow(arrow::error::ArrowError),
 }
 
-
-pub trait ExecutionPlan {
+pub trait ExecutionPlan: fmt::Display {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>>;
+    fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result;
 }
 
 impl From<std::io::Error> for ExecutionError {
@@ -20,12 +21,12 @@ impl From<arrow::error::ArrowError> for ExecutionError {
     fn from(e: arrow::error::ArrowError) -> Self { ExecutionError::Arrow(e) }
 }
 
-impl std::fmt::Display for ExecutionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ExecutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExecutionError::Io(e)           => write!(f, "I/O error: {}", e),
-            ExecutionError::InvalidData(m)  => write!(f, "invalid data: {}", m),
-            ExecutionError::Arrow(e)        => write!(f, "arrow error: {}", e),
+            ExecutionError::Io(e)          => write!(f, "I/O error: {}", e),
+            ExecutionError::InvalidData(m) => write!(f, "invalid data: {}", m),
+            ExecutionError::Arrow(e)       => write!(f, "arrow error: {}", e),
         }
     }
 }

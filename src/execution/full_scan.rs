@@ -2,6 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    fmt,
 };
 
 use arrow::{
@@ -117,5 +118,18 @@ impl ExecutionPlan for FullScanExec {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
         let part_dir = self.parts.pop()?;
         Some(self.read_part(&part_dir))
+    }
+
+    fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+        let indent = "  ".repeat(depth);
+        let cols: Vec<&str> = self.columns.iter().map(|c| c.name.as_str()).collect();
+        writeln!(f, "{}FullScan(cols=[{}])", indent, cols.join(", "))
+    }
+
+}
+
+impl fmt::Display for FullScanExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_indented(f, 0)
     }
 }

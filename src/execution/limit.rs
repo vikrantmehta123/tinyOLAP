@@ -1,7 +1,7 @@
 use arrow::array::RecordBatch;
+use std::fmt;
 
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
-
 
 pub struct LimitExec {
     limit: u64,
@@ -13,8 +13,8 @@ impl LimitExec {
     pub fn new(limit: u64, child: Box<dyn ExecutionPlan>) -> Self {
         Self {
             limit: limit,
-            emitted: 0, 
-            child: child
+            emitted: 0,
+            child: child,
         }
     }
 }
@@ -26,7 +26,7 @@ impl ExecutionPlan for LimitExec {
         }
 
         let batch = match self.child.next_batch()? {
-            Ok(b) =>  b,
+            Ok(b) => b,
             Err(e) => return Some(Err(e)),
         };
 
@@ -44,6 +44,16 @@ impl ExecutionPlan for LimitExec {
             self.emitted = self.limit;
             Some(Ok(batch.slice(0, remaining as usize)))
         }
+    }
+    fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+        let indent = "  ".repeat(depth);
+        writeln!(f, "{}Limit({})", indent, self.limit)?;
+        self.child.fmt_indented(f, depth + 1)
+    }
+}
 
+impl fmt::Display for LimitExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_indented(f, 0)
     }
 }

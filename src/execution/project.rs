@@ -1,5 +1,5 @@
 use arrow::array::RecordBatch;
-
+use std::fmt;
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::physical_plan::physical_operators::PhysicalExpr;
 
@@ -47,5 +47,18 @@ impl ExecutionPlan for ProjectExec {
             Ok(b) => Some(Ok(b)),
             Err(e) => Some(Err(e.into())),
         }
+    }
+
+    fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+        let indent = "  ".repeat(depth);
+        let cols: Vec<String> = self.projections.iter().map(|e| e.to_string()).collect();
+        writeln!(f, "{}Project([{}])", indent, cols.join(", "))?;
+        self.child.fmt_indented(f, depth + 1)
+    }
+}
+
+impl fmt::Display for ProjectExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_indented(f, 0)
     }
 }
