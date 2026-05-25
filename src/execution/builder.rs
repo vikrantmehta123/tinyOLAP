@@ -6,6 +6,8 @@ use crate::catalog::schema::{TableSchema, DataType};
 use crate::execution::aggregation::Accumulator;
 use crate::execution::aggregation::count::CountAccumulator;
 use crate::execution::aggregation::hash_aggregate::HashAggregateExec;
+use crate::execution::aggregation::max::MaxAccumulator;
+use crate::execution::aggregation::min::MinAccumulator;
 use crate::execution::aggregation::sum::SumAccumulator;
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::execution::filter::FilterExec;
@@ -86,6 +88,53 @@ pub fn build(
                     AggFunc::Count => {
                         Box::new(CountAccumulator::new(column_name))
                     }, 
+                    AggFunc::Min => {
+                        let col_schema = schema.columns.iter()
+                            .find(|c| c.name == column_name)
+                            .ok_or_else(|| ExecutionError::InvalidData(format!(
+                                "column '{}' not found in schema", column_name,
+                            )))?;
+
+                        match &col_schema.data_type {
+                            DataType::I8   => Box::new(MinAccumulator::<Int8Type>  ::new(column_name)),
+                            DataType::I16  => Box::new(MinAccumulator::<Int16Type> ::new(column_name)),
+                            DataType::I32  => Box::new(MinAccumulator::<Int32Type> ::new(column_name)),
+                            DataType::I64  => Box::new(MinAccumulator::<Int64Type> ::new(column_name)),
+                            DataType::U8   => Box::new(MinAccumulator::<UInt8Type> ::new(column_name)),
+                            DataType::U16  => Box::new(MinAccumulator::<UInt16Type>::new(column_name)),
+                            DataType::U32  => Box::new(MinAccumulator::<UInt32Type>::new(column_name)),
+                            DataType::U64  => Box::new(MinAccumulator::<UInt64Type>::new(column_name)),
+                            DataType::F32  => Box::new(MinAccumulator::<Float32Type>::new(column_name)),
+                            DataType::F64  => Box::new(MinAccumulator::<Float64Type>::new(column_name)),
+                            other => return Err(ExecutionError::InvalidData(format!(
+                                "MIN not supported on {:?}", other,
+                            ))),
+                        }
+                    },
+                    AggFunc::Max => {
+                        let col_schema = schema.columns.iter()
+                            .find(|c| c.name == column_name)
+                            .ok_or_else(|| ExecutionError::InvalidData(format!(
+                                "column '{}' not found in schema", column_name,
+                            )))?;
+
+                        match &col_schema.data_type {
+                            DataType::I8   => Box::new(MaxAccumulator::<Int8Type>  ::new(column_name)),
+                            DataType::I16  => Box::new(MaxAccumulator::<Int16Type> ::new(column_name)),
+                            DataType::I32  => Box::new(MaxAccumulator::<Int32Type> ::new(column_name)),
+                            DataType::I64  => Box::new(MaxAccumulator::<Int64Type> ::new(column_name)),
+                            DataType::U8   => Box::new(MaxAccumulator::<UInt8Type> ::new(column_name)),
+                            DataType::U16  => Box::new(MaxAccumulator::<UInt16Type>::new(column_name)),
+                            DataType::U32  => Box::new(MaxAccumulator::<UInt32Type>::new(column_name)),
+                            DataType::U64  => Box::new(MaxAccumulator::<UInt64Type>::new(column_name)),
+                            DataType::F32  => Box::new(MaxAccumulator::<Float32Type>::new(column_name)),
+                            DataType::F64  => Box::new(MaxAccumulator::<Float64Type>::new(column_name)),
+                            other => return Err(ExecutionError::InvalidData(format!(
+                                "MAX not supported on {:?}", other,
+                            ))),
+                        }
+                    },
+
                     other => return Err(ExecutionError::InvalidData(format!(
                         "aggregate function {:?} not supported yet", other,
                     ))),

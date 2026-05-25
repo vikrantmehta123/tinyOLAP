@@ -1,6 +1,8 @@
 pub mod count;
 pub mod hash_aggregate;
 pub mod sum;
+pub mod min;
+pub mod max;
 
 use arrow::{
     array::{ArrayRef, RecordBatch},
