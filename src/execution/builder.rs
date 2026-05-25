@@ -3,8 +3,10 @@ use std::path::Path;
 use arrow::datatypes::{Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type, Float32Type, Float64Type};
 
 use crate::catalog::schema::{TableSchema, DataType};
-use crate::execution::aggregation::count::CountExec;
-use crate::execution::aggregation::sum::SumExec;
+use crate::execution::aggregation::Accumulator;
+use crate::execution::aggregation::count::CountAccumulator;
+use crate::execution::aggregation::hash_aggregate::HashAggregateExec;
+use crate::execution::aggregation::sum::SumAccumulator;
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::execution::filter::FilterExec;
 use crate::execution::full_scan::FullScanExec;
@@ -57,48 +59,52 @@ pub fn build(
                     "GROUP BY is NOT supported".into(),
                 ));
             }
+            
+            let mut accumulators: Vec<Box<dyn Accumulator>> = Vec::with_capacity(aggregates.len());
+            for spec in &aggregates {
+                let column_name = match &spec.arg {
+                    PhysicalExpr::Column(n) => n.clone(), 
+                    _ => return Err(ExecutionError::InvalidData("Aggregate argument must be a column reference".into()))
+                };
 
-            let agg = &aggregates[0];
-        
-            let child = build(*input, schema, table_dir)?;
-            let column_name = match &agg.arg {
-                PhysicalExpr::Column(n) => n.clone(),
-                _ => {
-                    return Err(ExecutionError::InvalidData(
-                        "SUM/COUNT argument must be a column reference".into(),
-                    ));
-                }
-            };
+                let acc: Box<dyn Accumulator> = match &spec.func {
+                    AggFunc::Sum => {
+                        let col_schema = schema.columns.iter()
+                        .find(|c| c.name == column_name)
+                        .ok_or_else(|| ExecutionError::InvalidData(format!(
+                            "column '{}' not found in schema", column_name,
+                        )))?;
 
-            // Look up the column in the schema to find its data type.
-            let col_schema = schema.columns.iter()
-                .find(|c| c.name == column_name)
-                .ok_or_else(|| ExecutionError::InvalidData(format!(
-                    "column '{}' not found in schema", column_name,
-                )))?;
-
-            let exec: Box<dyn ExecutionPlan> = match &agg.func {
-                AggFunc::Sum => match &col_schema.data_type {
-                    DataType::I8   => Box::new(SumExec::<Int8Type>  ::new(column_name, child)),
-                    DataType::I16  => Box::new(SumExec::<Int16Type> ::new(column_name, child)),
-                    DataType::I32  => Box::new(SumExec::<Int32Type> ::new(column_name, child)),
-                    DataType::I64  => Box::new(SumExec::<Int64Type> ::new(column_name, child)),
-                    DataType::U8   => Box::new(SumExec::<UInt8Type> ::new(column_name, child)),
-                    DataType::U16  => Box::new(SumExec::<UInt16Type>::new(column_name, child)),
-                    DataType::U32  => Box::new(SumExec::<UInt32Type>::new(column_name, child)),
-                    DataType::U64  => Box::new(SumExec::<UInt64Type>::new(column_name, child)),
-                    DataType::F32  => Box::new(SumExec::<Float32Type>::new(column_name, child)),
-                    DataType::F64  => Box::new(SumExec::<Float64Type>::new(column_name, child)),
+                        match &col_schema.data_type {
+                            DataType::I8   => Box::new(SumAccumulator::<Int8Type>  ::new(column_name)),
+                            DataType::I16  => Box::new(SumAccumulator::<Int16Type> ::new(column_name)),
+                            DataType::I32  => Box::new(SumAccumulator::<Int32Type> ::new(column_name)),
+                            DataType::I64  => Box::new(SumAccumulator::<Int64Type> ::new(column_name)),
+                            DataType::U8   => Box::new(SumAccumulator::<UInt8Type> ::new(column_name)),
+                            DataType::U16  => Box::new(SumAccumulator::<UInt16Type>::new(column_name)),
+                            DataType::U32  => Box::new(SumAccumulator::<UInt32Type>::new(column_name)),
+                            DataType::U64  => Box::new(SumAccumulator::<UInt64Type>::new(column_name)),
+                            DataType::F32  => Box::new(SumAccumulator::<Float32Type>::new(column_name)),
+                            DataType::F64  => Box::new(SumAccumulator::<Float64Type>::new(column_name)),
+                            other => return Err(ExecutionError::InvalidData(format!(
+                                "SUM not supported on {:?}", other,
+                            ))),
+                        }
+                    }, 
+                    AggFunc::Count => {
+                        Box::new(CountAccumulator::new(column_name))
+                    }, 
                     other => return Err(ExecutionError::InvalidData(format!(
-                        "SUM not supported on {:?}", other,
+                        "aggregate function {:?} not supported yet", other,
                     ))),
-                },
-                AggFunc::Count => Box::new(CountExec::new(column_name, child)),
-                other => return Err(ExecutionError::InvalidData(format!(
-                    "aggregate function {:?} not supported yet", other,
-                ))),
-            };
-            Ok(exec)
+                };
+
+                accumulators.push(acc);
+
+            }
+
+            let child = build(*input, schema, table_dir)?;
+            Ok(Box::new(HashAggregateExec::new(accumulators, child)))
         }
         PhysicalPlan::ZoneMapScan { .. } => {
             unimplemented!("ZoneMapScanExec lands in TASK-004")
