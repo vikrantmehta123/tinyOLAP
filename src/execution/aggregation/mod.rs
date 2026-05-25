@@ -15,7 +15,12 @@ use crate::execution::executor::ExecutionError;
 /// to every accumulator via update(), then collects finalize() results.
 pub trait Accumulator {
     // Update the Accumulator's state with this batch
-    fn update(&mut self, batch: &RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError>;
+    fn update(
+        &mut self,
+        batch: &RecordBatch,
+        group_indices: &[u32],
+        num_groups: usize,
+    ) -> Result<(), ExecutionError>;
 
     /// Produce the final ArrayRef from the accumulated state.
     fn finalize(&mut self) -> ArrayRef;

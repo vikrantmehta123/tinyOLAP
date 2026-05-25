@@ -1,7 +1,7 @@
 use std::fmt;
 use std::{collections::HashMap, sync::Arc};
 
-use arrow::datatypes::{Field};
+use arrow::datatypes::Field;
 use arrow::row::{OwnedRow, RowConverter, SortField};
 use arrow::{
     array::{ArrayRef, RecordBatch},
@@ -29,7 +29,6 @@ impl HashAggregateExec {
         child: Box<dyn ExecutionPlan>,
         group_by_fields: Vec<Field>,
     ) -> Self {
-
         // If no GROUP BY clause, ensure we have one row with default output.
         if group_by_fields.is_empty() {
             for acc in accumulators.iter_mut() {
@@ -38,11 +37,12 @@ impl HashAggregateExec {
         }
 
         // RowConverter requires SortField. Create those.
-        let sort_fields: Vec<SortField> = group_by_fields.iter()
+        let sort_fields: Vec<SortField> = group_by_fields
+            .iter()
             .map(|f| SortField::new(f.data_type().clone()))
             .collect();
-        let row_converter = RowConverter::new(sort_fields)
-            .expect("RowConverter construction failed");
+        let row_converter =
+            RowConverter::new(sort_fields).expect("RowConverter construction failed");
 
         let mut all_fields = group_by_fields.clone();
         let acc_fields: Vec<Field> = accumulators.iter().map(|a| a.output_field()).collect();
@@ -85,23 +85,25 @@ impl ExecutionPlan for HashAggregateExec {
             // The i'th row in the batch belongs to the group -> group_indices[i]
             let mut group_indices;
             let num_groups; // there are num_groups unique groups in the batch
-            
-            
+
             // No GROUP BY clause in the query.
             if self.group_by_fields.is_empty() {
                 group_indices = vec![0u32; batch.num_rows()];
                 num_groups = 1usize;
             } else {
-
-                let group_by_arrays: Vec<ArrayRef> = self.group_by_fields
+                let group_by_arrays: Vec<ArrayRef> = self
+                    .group_by_fields
                     .iter()
-                    .map(|f| batch.column_by_name(f.name())
-                        .expect("group-by column missing from batch — planner bug")
-                        .clone())
+                    .map(|f| {
+                        batch
+                            .column_by_name(f.name())
+                            .expect("group-by column missing from batch — planner bug")
+                            .clone()
+                    })
                     .collect();
 
                 let rows = match self.row_converter.convert_columns(&group_by_arrays) {
-                    Ok(r)  => r,
+                    Ok(r) => r,
                     Err(e) => return Some(Err(e.into())),
                 };
 
@@ -137,10 +139,13 @@ impl ExecutionPlan for HashAggregateExec {
         let group_arrays: Vec<ArrayRef> = if self.group_by_fields.is_empty() {
             vec![]
         } else {
-            let owned_rows =  std::mem::take(&mut self.group_values);
-            match self.row_converter.convert_rows(owned_rows.iter().map(|or| or.row())) {
+            let owned_rows = std::mem::take(&mut self.group_values);
+            match self
+                .row_converter
+                .convert_rows(owned_rows.iter().map(|or| or.row()))
+            {
                 Ok(arrs) => arrs,
-                Err(e)   => return Some(Err(e.into())),
+                Err(e) => return Some(Err(e.into())),
             }
         };
 
@@ -165,11 +170,15 @@ impl ExecutionPlan for HashAggregateExec {
     fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
         let indent = "  ".repeat(depth);
 
-        let group_by_names: Vec<String> = self.group_by_fields.iter()
+        let group_by_names: Vec<String> = self
+            .group_by_fields
+            .iter()
             .map(|f| f.name().to_string())
             .collect();
 
-        let agg_names: Vec<String> = self.accumulators.iter()
+        let agg_names: Vec<String> = self
+            .accumulators
+            .iter()
             .map(|a| a.output_field().name().to_string())
             .collect();
 
@@ -182,5 +191,4 @@ impl ExecutionPlan for HashAggregateExec {
         )?;
         self.child.fmt_indented(f, depth + 1)
     }
-
 }
