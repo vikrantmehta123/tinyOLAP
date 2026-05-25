@@ -1,26 +1,33 @@
 use std::sync::Arc;
 
-use arrow::{array::{ArrayRef, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, PrimitiveArray}, compute::kernels::aggregate, datatypes::Field};
+use arrow::{
+    array::{ArrayRef, ArrowNumericType, PrimitiveArray},
+    compute::kernels::aggregate,
+    datatypes::Field,
+};
 
 use crate::execution::{aggregation::Accumulator, executor::ExecutionError};
 
 
+/// NaN handling is order-dependent and may differ between the SIMD fast path
+/// (`aggregate::max`) and the scalar loop. Acceptable for tinyOLAP today; revisit
+/// if float columns become common in aggregations.
 pub struct MaxAccumulator<T: ArrowNumericType>
-where 
-    T::Native: PartialOrd
+where
+    T::Native: PartialOrd,
 {
     has_value: Vec<bool>,
-    running_maximums: Vec<T::Native>, 
-    column_name: String
+    running_maximums: Vec<T::Native>,
+    column_name: String,
 }
 
 impl<T: ArrowNumericType> MaxAccumulator<T>
-where 
-    T::Native: PartialOrd
+where
+    T::Native: PartialOrd,
 {
     pub fn new(column_name: String) -> Self {
         Self {
-            column_name, 
+            column_name,
             running_maximums: Vec::new(),
             has_value: Vec::new(),
         }
@@ -28,19 +35,19 @@ where
 }
 
 impl<T: ArrowNumericType> Accumulator for MaxAccumulator<T>
-where 
-    T::Native: PartialOrd
+where
+    T::Native: PartialOrd,
 {
     fn update(
         &mut self,
         batch: &arrow::array::RecordBatch,
         group_indices: &[u32],
         num_groups: usize,
-    ) -> Result<(), ExecutionError>
-    {
+    ) -> Result<(), ExecutionError> {
         if self.has_value.len() < num_groups {
             self.has_value.resize(num_groups, false);
-            self.running_maximums.resize(num_groups, T::Native::default());
+            self.running_maximums
+                .resize(num_groups, T::Native::default());
         }
 
         // Find the column by the runtime-supplied name.
@@ -61,7 +68,6 @@ where
             .downcast_ref::<PrimitiveArray<T>>()
             .expect("MaxExec: column type does not match T — planner bug");
 
-
         // No GROUP BY => we can use SIMD
         if num_groups == 1 {
             if let Some(partial) = aggregate::max(arr) {
@@ -77,9 +83,8 @@ where
             return Ok(());
         }
 
-
         for (i, &gi) in group_indices.iter().enumerate() {
-            let value: <T as ArrowPrimitiveType>::Native = arr.value(i);
+            let value = arr.value(i);
 
             if !self.has_value[gi as usize] {
                 self.running_maximums[gi as usize] = value;
@@ -87,33 +92,29 @@ where
                 continue;
             }
 
-            if value.is_gt(self.running_maximums[gi as usize]) {
+            if value > self.running_maximums[gi as usize] {
                 self.running_maximums[gi as usize] = value;
             }
         }
 
         Ok(())
-
     }
 
     fn output_field(&self) -> Field {
-        Field::new(
-            format!("max({})", self.column_name),
-            T::DATA_TYPE,
-            false,
-        )
+        Field::new(format!("max({})", self.column_name), T::DATA_TYPE, false)
     }
 
     fn finalize(&mut self) -> ArrayRef {
-        Arc::new(PrimitiveArray::<T>::from_iter_values(
-            std::mem::take(&mut self.running_maximums),
-        ))
+        Arc::new(PrimitiveArray::<T>::from_iter_values(std::mem::take(
+            &mut self.running_maximums,
+        )))
     }
 
     fn ensure_capacity(&mut self, num_groups: usize) {
         if self.has_value.len() < num_groups {
             self.has_value.resize(num_groups, false);
-            self.running_maximums.resize(num_groups, T::Native::default());
+            self.running_maximums
+                .resize(num_groups, T::Native::default());
         }
     }
 }
