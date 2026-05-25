@@ -23,6 +23,7 @@ pub enum LogicalOp {
     Or,
 }
 
+#[derive(Debug)]
 pub enum AggFunc {
     Count,
     Sum,

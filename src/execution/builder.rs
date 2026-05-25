@@ -3,6 +3,7 @@ use std::path::Path;
 use arrow::datatypes::{Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type, Float32Type, Float64Type};
 
 use crate::catalog::schema::{TableSchema, DataType};
+use crate::execution::aggregation::count::CountExec;
 use crate::execution::aggregation::sum::SumExec;
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::execution::filter::FilterExec;
@@ -48,23 +49,23 @@ pub fn build(
             aggregates,
             input,
         } => {
-            // Right now, we don't support GROUP BY. Only sum is present
+            // Right now, we don't support GROUP BY. Only sum & count is present
             // Validate that
             if !group_by.is_empty()
-                || aggregates.len() != 1
-                || !matches!(aggregates[0].func, AggFunc::Sum)
             {
                 return Err(ExecutionError::InvalidData(
-                    "Only SUM with no GROUP BY is supported".into(),
+                    "GROUP BY is NOT supported".into(),
                 ));
             }
 
+            let agg = &aggregates[0];
+        
             let child = build(*input, schema, table_dir)?;
-            let column_name = match &aggregates[0].arg {
+            let column_name = match &agg.arg {
                 PhysicalExpr::Column(n) => n.clone(),
                 _ => {
                     return Err(ExecutionError::InvalidData(
-                        "SUM argument must be a column reference".into(),
+                        "SUM/COUNT argument must be a column reference".into(),
                     ));
                 }
             };
@@ -76,24 +77,28 @@ pub fn build(
                     "column '{}' not found in schema", column_name,
                 )))?;
 
-            let exec: Box<dyn ExecutionPlan> = match &col_schema.data_type {
-                DataType::I8   => Box::new(SumExec::<Int8Type>  ::new(column_name, child)),
-                DataType::I16  => Box::new(SumExec::<Int16Type> ::new(column_name, child)),
-                DataType::I32  => Box::new(SumExec::<Int32Type> ::new(column_name, child)),
-                DataType::I64  => Box::new(SumExec::<Int64Type> ::new(column_name, child)),
-                DataType::U8   => Box::new(SumExec::<UInt8Type> ::new(column_name, child)),
-                DataType::U16  => Box::new(SumExec::<UInt16Type>::new(column_name, child)),
-                DataType::U32  => Box::new(SumExec::<UInt32Type>::new(column_name, child)),
-                DataType::U64  => Box::new(SumExec::<UInt64Type>::new(column_name, child)),
-                DataType::F32  => Box::new(SumExec::<Float32Type>::new(column_name, child)),
-                DataType::F64  => Box::new(SumExec::<Float64Type>::new(column_name, child)),
+            let exec: Box<dyn ExecutionPlan> = match &agg.func {
+                AggFunc::Sum => match &col_schema.data_type {
+                    DataType::I8   => Box::new(SumExec::<Int8Type>  ::new(column_name, child)),
+                    DataType::I16  => Box::new(SumExec::<Int16Type> ::new(column_name, child)),
+                    DataType::I32  => Box::new(SumExec::<Int32Type> ::new(column_name, child)),
+                    DataType::I64  => Box::new(SumExec::<Int64Type> ::new(column_name, child)),
+                    DataType::U8   => Box::new(SumExec::<UInt8Type> ::new(column_name, child)),
+                    DataType::U16  => Box::new(SumExec::<UInt16Type>::new(column_name, child)),
+                    DataType::U32  => Box::new(SumExec::<UInt32Type>::new(column_name, child)),
+                    DataType::U64  => Box::new(SumExec::<UInt64Type>::new(column_name, child)),
+                    DataType::F32  => Box::new(SumExec::<Float32Type>::new(column_name, child)),
+                    DataType::F64  => Box::new(SumExec::<Float64Type>::new(column_name, child)),
+                    other => return Err(ExecutionError::InvalidData(format!(
+                        "SUM not supported on {:?}", other,
+                    ))),
+                },
+                AggFunc::Count => Box::new(CountExec::new(column_name, child)),
                 other => return Err(ExecutionError::InvalidData(format!(
-                    "SUM not supported on {:?}", other,
+                    "aggregate function {:?} not supported yet", other,
                 ))),
             };
             Ok(exec)
-
-
         }
         PhysicalPlan::ZoneMapScan { .. } => {
             unimplemented!("ZoneMapScanExec lands in TASK-004")
