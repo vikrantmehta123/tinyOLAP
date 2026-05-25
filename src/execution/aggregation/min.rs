@@ -1,0 +1,120 @@
+use std::sync::Arc;
+
+use arrow::{
+    array::{ArrayRef, ArrowNumericType, PrimitiveArray},
+    compute::kernels::aggregate,
+    datatypes::Field,
+};
+
+use crate::execution::{aggregation::Accumulator, executor::ExecutionError};
+
+
+/// NaN handling is order-dependent and may differ between the SIMD fast path
+/// (`aggregate::min`) and the scalar loop. Acceptable for tinyOLAP today; revisit
+/// if float columns become common in aggregations.
+pub struct MinAccumulator<T: ArrowNumericType>
+where
+    T::Native: PartialOrd,
+{
+    has_value: Vec<bool>,
+    running_minimums: Vec<T::Native>,
+    column_name: String,
+}
+
+impl<T: ArrowNumericType> MinAccumulator<T>
+where
+    T::Native: PartialOrd,
+{
+    pub fn new(column_name: String) -> Self {
+        Self {
+            column_name,
+            running_minimums: Vec::new(),
+            has_value: Vec::new(),
+        }
+    }
+}
+
+impl<T: ArrowNumericType> Accumulator for MinAccumulator<T>
+where
+    T::Native: PartialOrd,
+{
+    fn update(
+        &mut self,
+        batch: &arrow::array::RecordBatch,
+        group_indices: &[u32],
+        num_groups: usize,
+    ) -> Result<(), ExecutionError> {
+        if self.has_value.len() < num_groups {
+            self.has_value.resize(num_groups, false);
+            self.running_minimums
+                .resize(num_groups, T::Native::default());
+        }
+
+        // Find the column by the runtime-supplied name.
+        // Column Not Found is a planner error.
+        let col_ref = match batch.column_by_name(&self.column_name) {
+            Some(c) => c,
+            None => {
+                return Err(ExecutionError::InvalidData(format!(
+                    "MinAccumulator: column '{}' not found in batch",
+                    self.column_name,
+                )));
+            }
+        };
+
+        // Downcast the array to the primitive Arrow type
+        let arr = col_ref
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .expect("MinExec: column type does not match T — planner bug");
+
+        // No GROUP BY => we can use SIMD
+        if num_groups == 1 {
+            if let Some(partial) = aggregate::min(arr) {
+                if self.has_value[0] {
+                    if partial < self.running_minimums[0] {
+                        self.running_minimums[0] = partial;
+                    }
+                } else {
+                    self.running_minimums[0] = partial;
+                    self.has_value[0] = true;
+                }
+            }
+            return Ok(());
+        }
+
+        for (i, &gi) in group_indices.iter().enumerate() {
+            let value = arr.value(i);
+
+            if !self.has_value[gi as usize] {
+                self.running_minimums[gi as usize] = value;
+                self.has_value[gi as usize] = true;
+                continue;
+            }
+
+            if value < self.running_minimums[gi as usize] {
+                self.running_minimums[gi as usize] = value;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn output_field(&self) -> Field {
+        Field::new(format!("min({})", self.column_name), T::DATA_TYPE, false)
+    }
+
+    fn finalize(&mut self) -> ArrayRef {
+        Arc::new(PrimitiveArray::<T>::from_iter_values(std::mem::take(
+            &mut self.running_minimums,
+        )))
+    }
+
+    fn ensure_capacity(&mut self, num_groups: usize) {
+        if self.has_value.len() < num_groups {
+            self.has_value.resize(num_groups, false);
+            self.running_minimums
+                .resize(num_groups, T::Native::default());
+        }
+    }
+}
