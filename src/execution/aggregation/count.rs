@@ -25,17 +25,14 @@ impl Accumulator for CountAccumulator {
     }
 
     fn finalize(&mut self) -> ArrayRef {
-        let arr: ArrayRef = Arc::new(UInt64Array::from(vec![self.count]));
-        arr
+        Arc::new(UInt64Array::from(vec![self.count]))
     }   
 
     fn output_field(&self) -> Field {
-        let output_field = Field::new(
+        Field::new(
             format!("count({})", self.column_name), 
             DataType::UInt64,
             false
-        );
-
-        output_field
+        )
     }
 }

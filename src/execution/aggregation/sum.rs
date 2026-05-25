@@ -107,7 +107,7 @@ impl Summable for UInt8Type {
 
 impl Summable for Float32Type {
     type Widened = f64;
-    const OUTPUT_DATATYPE: DataType = DataType::UInt64;
+    const OUTPUT_DATATYPE: DataType = DataType::Float64;
 
     fn into_array(value: Self::Widened) -> ArrayRef {
         Arc::new(Float64Array::from(vec![value]))
@@ -116,7 +116,7 @@ impl Summable for Float32Type {
 
 impl Summable for Float64Type {
     type Widened = f64;
-    const OUTPUT_DATATYPE: DataType = DataType::UInt64;
+    const OUTPUT_DATATYPE: DataType = DataType::Float64;
 
     fn into_array(value: Self::Widened) -> ArrayRef {
         Arc::new(Float64Array::from(vec![value]))
@@ -176,16 +176,14 @@ where
     }
 
     fn output_field(&self) -> Field {
-        let output_field = Field::new(
+        Field::new(
             format!("sum({})", self.column_name), 
             T::OUTPUT_DATATYPE,
             false
-        );
-        output_field
+        )
     }
 
     fn finalize(&mut self) -> ArrayRef {
-        let arr: ArrayRef = T::into_array(self.running_sum);
-        arr
+        T::into_array(self.running_sum)
     }
 }
