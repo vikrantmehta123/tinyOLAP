@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use arrow::datatypes::{Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type, Float32Type, Float64Type};
+use arrow::datatypes::{Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type};
 
 use crate::catalog::schema::{TableSchema, DataType};
 use crate::execution::aggregation::Accumulator;
@@ -51,14 +51,6 @@ pub fn build(
             aggregates,
             input,
         } => {
-            // Right now, we don't support GROUP BY. Only sum & count is present
-            // Validate that
-            if !group_by.is_empty()
-            {
-                return Err(ExecutionError::InvalidData(
-                    "GROUP BY is NOT supported".into(),
-                ));
-            }
             
             let mut accumulators: Vec<Box<dyn Accumulator>> = Vec::with_capacity(aggregates.len());
             for spec in &aggregates {
@@ -104,7 +96,23 @@ pub fn build(
             }
 
             let child = build(*input, schema, table_dir)?;
-            Ok(Box::new(HashAggregateExec::new(accumulators, child)))
+
+            let group_by_fields: Vec<Field> = group_by.iter().map(|expr| match expr {
+                PhysicalExpr::Column(name) => {
+                    let col_schema = schema.columns.iter()
+                        .find(|c| c.name == *name)
+                        .ok_or_else(|| ExecutionError::InvalidData(format!(
+                            "GROUP BY column '{}' not found in schema", name,
+                        )))?;
+                    Ok::<Field, ExecutionError>(Field::new(name, col_schema.data_type.to_arrow(), false))
+                }
+                _ => Err(ExecutionError::InvalidData(
+                    "GROUP BY argument must be a column reference".into(),
+                )),
+            }).collect::<Result<_, _>>()?;
+
+
+            Ok(Box::new(HashAggregateExec::new(accumulators, child, group_by_fields)))
         }
         PhysicalPlan::ZoneMapScan { .. } => {
             unimplemented!("ZoneMapScanExec lands in TASK-004")

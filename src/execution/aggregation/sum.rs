@@ -28,7 +28,7 @@ where
     const OUTPUT_DATATYPE: DataType;
 
     // // The Widened would need to be cast as an array when producing output
-    fn into_array(value: Self::Widened) -> ArrayRef;
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef;
 }
 
 
@@ -37,8 +37,8 @@ impl Summable for Int64Type {
     type Widened = i64;
     const OUTPUT_DATATYPE:DataType = DataType::Int64;
 
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(Int64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(Int64Array::from(values))
     }
 }
 
@@ -46,8 +46,8 @@ impl Summable for Int32Type {
     type Widened = i64;
     const OUTPUT_DATATYPE: DataType = DataType::Int64;
 
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(Int64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(Int64Array::from(values))
     }
 }
 
@@ -55,8 +55,8 @@ impl Summable for Int16Type {
     type Widened = i64;
     const OUTPUT_DATATYPE: DataType = DataType::Int64;
     
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(Int64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(Int64Array::from(values))
     }
 }
 
@@ -64,8 +64,8 @@ impl Summable for Int8Type {
     type Widened = i64;
     const OUTPUT_DATATYPE: DataType = DataType::Int64;
     
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(Int64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(Int64Array::from(values))
     }
 }
 
@@ -73,8 +73,8 @@ impl Summable for UInt64Type {
     type Widened = u64;
     const OUTPUT_DATATYPE: DataType = DataType::UInt64;
 
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(UInt64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(UInt64Array::from(values))
     }
 }
 
@@ -82,8 +82,8 @@ impl Summable for UInt32Type {
     type Widened = u64;
     const OUTPUT_DATATYPE: DataType = DataType::UInt64;
 
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(UInt64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(UInt64Array::from(values))
     }
 }
 
@@ -91,8 +91,8 @@ impl Summable for UInt16Type {
     type Widened = u64;
     const OUTPUT_DATATYPE: DataType = DataType::UInt64;
 
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(UInt64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(UInt64Array::from(values))
     }
 }
 
@@ -100,8 +100,8 @@ impl Summable for UInt8Type {
     type Widened = u64;
     const OUTPUT_DATATYPE: DataType = DataType::UInt64;
 
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(UInt64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(UInt64Array::from(values))
     }
 }
 
@@ -109,8 +109,8 @@ impl Summable for Float32Type {
     type Widened = f64;
     const OUTPUT_DATATYPE: DataType = DataType::Float64;
 
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(Float64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(Float64Array::from(values))
     }   
 }
 
@@ -118,8 +118,8 @@ impl Summable for Float64Type {
     type Widened = f64;
     const OUTPUT_DATATYPE: DataType = DataType::Float64;
 
-    fn into_array(value: Self::Widened) -> ArrayRef {
-        Arc::new(Float64Array::from(vec![value]))
+    fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
+        Arc::new(Float64Array::from(values))
     }   
 }
 
@@ -129,7 +129,7 @@ pub struct SumAccumulator<T: Summable>
 where 
     T::Native: Into<T::Widened>,
 {
-    running_sum: T::Widened,
+    running_sums: Vec<T::Widened>,
     column_name: String,
 }
 
@@ -140,7 +140,7 @@ where
     pub fn new(column_name: String) -> Self {
         Self {
             column_name, 
-            running_sum: T::Widened::default(),
+            running_sums: Vec::new(),
         }
     }
 }
@@ -149,7 +149,12 @@ impl<T:Summable> Accumulator for SumAccumulator<T>
 where 
     T::Native: Into<T::Widened>
 {
-    fn update(&mut self, batch: &RecordBatch) -> Result<(), ExecutionError> {
+    fn update(&mut self, batch: &RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
+    
+        if self.running_sums.len() < num_groups {
+            self.running_sums.resize(num_groups, T::Widened::default());
+        }
+        
         // Find the column by the runtime-supplied name.
         // Column Not Found is a planner error.
         let col_ref = match batch.column_by_name(&self.column_name) {
@@ -166,10 +171,18 @@ where
             .downcast_ref::<PrimitiveArray<T>>()
             .expect("SumExec: column type does not match T — planner bug");
 
-        // Arrow's SIMD sum kernel
-        if let Some(partial) = aggregate::sum(arr) {
-            // .into() widens T::Native into T::Widened.
-            self.running_sum += partial.into();
+
+        // No GROUP BY => we can use SIMD
+        if num_groups == 1 {
+            if let Some(partial) = aggregate::sum(arr) {
+                self.running_sums[0] += partial.into();
+            }
+            return Ok(());
+        }
+
+        for (i, &gi) in group_indices.iter().enumerate() {
+            let value = arr.value(i);
+            self.running_sums[gi as usize] += value.into();
         }
 
         Ok(())
@@ -184,6 +197,12 @@ where
     }
 
     fn finalize(&mut self) -> ArrayRef {
-        T::into_array(self.running_sum)
+        T::into_array(std::mem::take(&mut self.running_sums))
+    }
+
+    fn ensure_capacity(&mut self, num_groups: usize) {
+        if self.running_sums.len() < num_groups {
+            self.running_sums.resize(num_groups, T::Widened::default());
+        }
     }
 }
