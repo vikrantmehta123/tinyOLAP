@@ -3,6 +3,7 @@ pub mod hash_aggregate;
 pub mod sum;
 pub mod min;
 pub mod max;
+pub mod avg;
 
 use arrow::{
     array::{ArrayRef, RecordBatch},

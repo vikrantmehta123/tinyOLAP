@@ -1,9 +1,13 @@
 use std::path::Path;
 
-use arrow::datatypes::{Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type};
+use arrow::datatypes::{
+    Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
+};
 
-use crate::catalog::schema::{TableSchema, DataType};
+use crate::catalog::schema::{DataType, TableSchema};
 use crate::execution::aggregation::Accumulator;
+use crate::execution::aggregation::avg::AvgAccumulator;
 use crate::execution::aggregation::count::CountAccumulator;
 use crate::execution::aggregation::hash_aggregate::HashAggregateExec;
 use crate::execution::aggregation::max::MaxAccumulator;
@@ -53,115 +57,199 @@ pub fn build(
             aggregates,
             input,
         } => {
-            
             let mut accumulators: Vec<Box<dyn Accumulator>> = Vec::with_capacity(aggregates.len());
             for spec in &aggregates {
                 let column_name = match &spec.arg {
-                    PhysicalExpr::Column(n) => n.clone(), 
-                    _ => return Err(ExecutionError::InvalidData("Aggregate argument must be a column reference".into()))
+                    PhysicalExpr::Column(n) => n.clone(),
+                    _ => {
+                        return Err(ExecutionError::InvalidData(
+                            "Aggregate argument must be a column reference".into(),
+                        ));
+                    }
                 };
 
                 let acc: Box<dyn Accumulator> = match &spec.func {
                     AggFunc::Sum => {
-                        let col_schema = schema.columns.iter()
-                        .find(|c| c.name == column_name)
-                        .ok_or_else(|| ExecutionError::InvalidData(format!(
-                            "column '{}' not found in schema", column_name,
-                        )))?;
+                        let col_schema = schema
+                            .columns
+                            .iter()
+                            .find(|c| c.name == column_name)
+                            .ok_or_else(|| {
+                                ExecutionError::InvalidData(format!(
+                                    "column '{}' not found in schema",
+                                    column_name,
+                                ))
+                            })?;
 
                         match &col_schema.data_type {
-                            DataType::I8   => Box::new(SumAccumulator::<Int8Type>  ::new(column_name)),
-                            DataType::I16  => Box::new(SumAccumulator::<Int16Type> ::new(column_name)),
-                            DataType::I32  => Box::new(SumAccumulator::<Int32Type> ::new(column_name)),
-                            DataType::I64  => Box::new(SumAccumulator::<Int64Type> ::new(column_name)),
-                            DataType::U8   => Box::new(SumAccumulator::<UInt8Type> ::new(column_name)),
-                            DataType::U16  => Box::new(SumAccumulator::<UInt16Type>::new(column_name)),
-                            DataType::U32  => Box::new(SumAccumulator::<UInt32Type>::new(column_name)),
-                            DataType::U64  => Box::new(SumAccumulator::<UInt64Type>::new(column_name)),
-                            DataType::F32  => Box::new(SumAccumulator::<Float32Type>::new(column_name)),
-                            DataType::F64  => Box::new(SumAccumulator::<Float64Type>::new(column_name)),
-                            other => return Err(ExecutionError::InvalidData(format!(
-                                "SUM not supported on {:?}", other,
-                            ))),
+                            DataType::I8 => Box::new(SumAccumulator::<Int8Type>::new(column_name)),
+                            DataType::I16 => {
+                                Box::new(SumAccumulator::<Int16Type>::new(column_name))
+                            }
+                            DataType::I32 => {
+                                Box::new(SumAccumulator::<Int32Type>::new(column_name))
+                            }
+                            DataType::I64 => {
+                                Box::new(SumAccumulator::<Int64Type>::new(column_name))
+                            }
+                            DataType::U8 => Box::new(SumAccumulator::<UInt8Type>::new(column_name)),
+                            DataType::U16 => {
+                                Box::new(SumAccumulator::<UInt16Type>::new(column_name))
+                            }
+                            DataType::U32 => {
+                                Box::new(SumAccumulator::<UInt32Type>::new(column_name))
+                            }
+                            DataType::U64 => {
+                                Box::new(SumAccumulator::<UInt64Type>::new(column_name))
+                            }
+                            DataType::F32 => {
+                                Box::new(SumAccumulator::<Float32Type>::new(column_name))
+                            }
+                            DataType::F64 => {
+                                Box::new(SumAccumulator::<Float64Type>::new(column_name))
+                            }
+                            other => {
+                                return Err(ExecutionError::InvalidData(format!(
+                                    "SUM not supported on {:?}",
+                                    other,
+                                )));
+                            }
                         }
-                    }, 
-                    AggFunc::Count => {
-                        Box::new(CountAccumulator::new(column_name))
-                    }, 
+                    }
+                    AggFunc::Count => Box::new(CountAccumulator::new(column_name)),
                     AggFunc::Min => {
-                        let col_schema = schema.columns.iter()
+                        let col_schema = schema
+                            .columns
+                            .iter()
                             .find(|c| c.name == column_name)
-                            .ok_or_else(|| ExecutionError::InvalidData(format!(
-                                "column '{}' not found in schema", column_name,
-                            )))?;
+                            .ok_or_else(|| {
+                                ExecutionError::InvalidData(format!(
+                                    "column '{}' not found in schema",
+                                    column_name,
+                                ))
+                            })?;
 
                         match &col_schema.data_type {
-                            DataType::I8   => Box::new(MinAccumulator::<Int8Type>  ::new(column_name)),
-                            DataType::I16  => Box::new(MinAccumulator::<Int16Type> ::new(column_name)),
-                            DataType::I32  => Box::new(MinAccumulator::<Int32Type> ::new(column_name)),
-                            DataType::I64  => Box::new(MinAccumulator::<Int64Type> ::new(column_name)),
-                            DataType::U8   => Box::new(MinAccumulator::<UInt8Type> ::new(column_name)),
-                            DataType::U16  => Box::new(MinAccumulator::<UInt16Type>::new(column_name)),
-                            DataType::U32  => Box::new(MinAccumulator::<UInt32Type>::new(column_name)),
-                            DataType::U64  => Box::new(MinAccumulator::<UInt64Type>::new(column_name)),
-                            DataType::F32  => Box::new(MinAccumulator::<Float32Type>::new(column_name)),
-                            DataType::F64  => Box::new(MinAccumulator::<Float64Type>::new(column_name)),
-                            other => return Err(ExecutionError::InvalidData(format!(
-                                "MIN not supported on {:?}", other,
-                            ))),
+                            DataType::I8 => Box::new(MinAccumulator::<Int8Type>::new(column_name)),
+                            DataType::I16 => {
+                                Box::new(MinAccumulator::<Int16Type>::new(column_name))
+                            }
+                            DataType::I32 => {
+                                Box::new(MinAccumulator::<Int32Type>::new(column_name))
+                            }
+                            DataType::I64 => {
+                                Box::new(MinAccumulator::<Int64Type>::new(column_name))
+                            }
+                            DataType::U8 => Box::new(MinAccumulator::<UInt8Type>::new(column_name)),
+                            DataType::U16 => {
+                                Box::new(MinAccumulator::<UInt16Type>::new(column_name))
+                            }
+                            DataType::U32 => {
+                                Box::new(MinAccumulator::<UInt32Type>::new(column_name))
+                            }
+                            DataType::U64 => {
+                                Box::new(MinAccumulator::<UInt64Type>::new(column_name))
+                            }
+                            DataType::F32 => {
+                                Box::new(MinAccumulator::<Float32Type>::new(column_name))
+                            }
+                            DataType::F64 => {
+                                Box::new(MinAccumulator::<Float64Type>::new(column_name))
+                            }
+                            other => {
+                                return Err(ExecutionError::InvalidData(format!(
+                                    "MIN not supported on {:?}",
+                                    other,
+                                )));
+                            }
                         }
-                    },
+                    }
                     AggFunc::Max => {
-                        let col_schema = schema.columns.iter()
+                        let col_schema = schema
+                            .columns
+                            .iter()
                             .find(|c| c.name == column_name)
-                            .ok_or_else(|| ExecutionError::InvalidData(format!(
-                                "column '{}' not found in schema", column_name,
-                            )))?;
+                            .ok_or_else(|| {
+                                ExecutionError::InvalidData(format!(
+                                    "column '{}' not found in schema",
+                                    column_name,
+                                ))
+                            })?;
 
                         match &col_schema.data_type {
-                            DataType::I8   => Box::new(MaxAccumulator::<Int8Type>  ::new(column_name)),
-                            DataType::I16  => Box::new(MaxAccumulator::<Int16Type> ::new(column_name)),
-                            DataType::I32  => Box::new(MaxAccumulator::<Int32Type> ::new(column_name)),
-                            DataType::I64  => Box::new(MaxAccumulator::<Int64Type> ::new(column_name)),
-                            DataType::U8   => Box::new(MaxAccumulator::<UInt8Type> ::new(column_name)),
-                            DataType::U16  => Box::new(MaxAccumulator::<UInt16Type>::new(column_name)),
-                            DataType::U32  => Box::new(MaxAccumulator::<UInt32Type>::new(column_name)),
-                            DataType::U64  => Box::new(MaxAccumulator::<UInt64Type>::new(column_name)),
-                            DataType::F32  => Box::new(MaxAccumulator::<Float32Type>::new(column_name)),
-                            DataType::F64  => Box::new(MaxAccumulator::<Float64Type>::new(column_name)),
-                            other => return Err(ExecutionError::InvalidData(format!(
-                                "MAX not supported on {:?}", other,
-                            ))),
+                            DataType::I8 => Box::new(MaxAccumulator::<Int8Type>::new(column_name)),
+                            DataType::I16 => {
+                                Box::new(MaxAccumulator::<Int16Type>::new(column_name))
+                            }
+                            DataType::I32 => {
+                                Box::new(MaxAccumulator::<Int32Type>::new(column_name))
+                            }
+                            DataType::I64 => {
+                                Box::new(MaxAccumulator::<Int64Type>::new(column_name))
+                            }
+                            DataType::U8 => Box::new(MaxAccumulator::<UInt8Type>::new(column_name)),
+                            DataType::U16 => {
+                                Box::new(MaxAccumulator::<UInt16Type>::new(column_name))
+                            }
+                            DataType::U32 => {
+                                Box::new(MaxAccumulator::<UInt32Type>::new(column_name))
+                            }
+                            DataType::U64 => {
+                                Box::new(MaxAccumulator::<UInt64Type>::new(column_name))
+                            }
+                            DataType::F32 => {
+                                Box::new(MaxAccumulator::<Float32Type>::new(column_name))
+                            }
+                            DataType::F64 => {
+                                Box::new(MaxAccumulator::<Float64Type>::new(column_name))
+                            }
+                            other => {
+                                return Err(ExecutionError::InvalidData(format!(
+                                    "MAX not supported on {:?}",
+                                    other,
+                                )));
+                            }
                         }
-                    },
-
-                    other => return Err(ExecutionError::InvalidData(format!(
-                        "aggregate function {:?} not supported yet", other,
-                    ))),
+                    }
+                    AggFunc::Avg => Box::new(AvgAccumulator::new(column_name)),
                 };
 
                 accumulators.push(acc);
-
             }
 
             let child = build(*input, schema, table_dir)?;
 
-            let group_by_fields: Vec<Field> = group_by.iter().map(|expr| match expr {
-                PhysicalExpr::Column(name) => {
-                    let col_schema = schema.columns.iter()
-                        .find(|c| c.name == *name)
-                        .ok_or_else(|| ExecutionError::InvalidData(format!(
-                            "GROUP BY column '{}' not found in schema", name,
-                        )))?;
-                    Ok::<Field, ExecutionError>(Field::new(name, col_schema.data_type.to_arrow(), false))
-                }
-                _ => Err(ExecutionError::InvalidData(
-                    "GROUP BY argument must be a column reference".into(),
-                )),
-            }).collect::<Result<_, _>>()?;
+            let group_by_fields: Vec<Field> = group_by
+                .iter()
+                .map(|expr| match expr {
+                    PhysicalExpr::Column(name) => {
+                        let col_schema = schema
+                            .columns
+                            .iter()
+                            .find(|c| c.name == *name)
+                            .ok_or_else(|| {
+                                ExecutionError::InvalidData(format!(
+                                    "GROUP BY column '{}' not found in schema",
+                                    name,
+                                ))
+                            })?;
+                        Ok::<Field, ExecutionError>(Field::new(
+                            name,
+                            col_schema.data_type.to_arrow(),
+                            false,
+                        ))
+                    }
+                    _ => Err(ExecutionError::InvalidData(
+                        "GROUP BY argument must be a column reference".into(),
+                    )),
+                })
+                .collect::<Result<_, _>>()?;
 
-
-            Ok(Box::new(HashAggregateExec::new(accumulators, child, group_by_fields)))
+            Ok(Box::new(HashAggregateExec::new(
+                accumulators,
+                child,
+                group_by_fields,
+            )))
         }
         PhysicalPlan::ZoneMapScan { .. } => {
             unimplemented!("ZoneMapScanExec lands in TASK-004")
