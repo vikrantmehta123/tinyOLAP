@@ -1,11 +1,12 @@
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use arrow::datatypes::{
-    Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
-    UInt16Type, UInt32Type, UInt64Type,
+    Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, UInt8Type, UInt16Type, UInt32Type, UInt64Type
 };
 
-use crate::catalog::schema::{DataType, TableSchema};
+use crate::catalog::schema::{ColumnSchema, DataType, TableSchema};
 use crate::execution::aggregation::Accumulator;
 use crate::execution::aggregation::avg::AvgAccumulator;
 use crate::execution::aggregation::count::CountAccumulator;
@@ -15,7 +16,7 @@ use crate::execution::aggregation::min::MinAccumulator;
 use crate::execution::aggregation::sum::SumAccumulator;
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::execution::filter::FilterExec;
-use crate::execution::full_scan::FullScanExec;
+use crate::execution::full_scan::{FullScanExec, PartWorkSource};
 use crate::execution::limit::LimitExec;
 use crate::execution::project::ProjectExec;
 use crate::physical_plan::physical_operators::{AggFunc, PhysicalExpr, PhysicalPlan};
@@ -33,7 +34,43 @@ pub fn build(
     match plan {
         // Leaf: construct the scan operator directly.
         PhysicalPlan::FullScan { columns, .. } => {
-            let exec = FullScanExec::new(table_dir, columns, schema)?;
+            let mut parts: Vec<PathBuf> = fs::read_dir(table_dir)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.is_dir()
+                        && p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map_or(false, |n| n.starts_with("part_"))
+                })
+                .collect();
+            parts.sort();
+            parts.reverse();
+
+            let columns: Vec<ColumnSchema> = columns
+                .iter()
+                .map(|name| {
+                    schema
+                        .columns
+                        .iter()
+                        .find(|c| c.name == *name)
+                        .cloned()
+                        .ok_or_else(|| ExecutionError::InvalidData(format!("unknown column: {}", name)))
+                })
+                .collect::<Result<_, _>>()?;
+
+            // 3. Build the Arrow schema once and cache it. Every RecordBatch this
+            //    scan emits shares this exact Arc<Schema> — no per-batch alloc.
+            let fields: Vec<Field> = columns
+                .iter()
+                .map(|c| Field::new(&c.name, c.data_type.to_arrow(), false))
+                .collect();
+            let arrow_schema = Arc::new(Schema::new(fields));
+
+            let ws = Arc::new(PartWorkSource::new(parts));
+
+            let exec = FullScanExec::new(ws, columns, arrow_schema);
+
             Ok(Box::new(exec))
         }
 

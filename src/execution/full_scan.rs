@@ -1,70 +1,55 @@
 use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-    fmt,
+    fmt, path::{Path, PathBuf}, sync::{Arc, atomic::{AtomicUsize, Ordering::Relaxed}}
 };
 
 use arrow::{
     array::{ArrayRef, RecordBatch},
-    datatypes::{Field, Schema},
+    datatypes::Schema,
 };
 
 use crate::{
-    catalog::schema::{ColumnSchema, DataType, TableSchema},
+    catalog::schema::{ColumnSchema, DataType},
     execution::executor::{ExecutionError, ExecutionPlan}, storage::{column_reader::ColumnReader, string_column_reader::StringColumnReader},
 };
 
+pub trait ScanWorkSource {
+    fn next_work(&self) -> Option<PathBuf>;
+}
+
+pub struct PartWorkSource{
+    parts: Vec<PathBuf>,
+    next: AtomicUsize,
+}
+
+impl PartWorkSource {
+    pub fn new(parts: Vec<PathBuf>) -> Self {
+        Self {
+            parts, 
+            next: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl ScanWorkSource for PartWorkSource { 
+    fn next_work(&self) -> Option<PathBuf> {
+        let val = self.next.fetch_add(1, Relaxed);
+        self.parts.get(val).cloned()
+    }
+}
+
 pub struct FullScanExec {
-    parts: Vec<PathBuf>,        // remaining part directories, popped from the back
+    work_source: Arc<dyn ScanWorkSource>,
     columns: Vec<ColumnSchema>, // which columns to read, in output order
-    schema: Arc<arrow::datatypes::Schema>, // Arrow schema cached once for reuse
+    schema: Arc<Schema>, // Arrow schema cached once for reuse
 }
 
 impl FullScanExec {
-    pub fn new(
-        table_dir: &Path,
-        column_names: Vec<String>,
-        table_schema: &TableSchema,
-    ) -> Result<Self, ExecutionError> {
-        let mut parts: Vec<PathBuf> = fs::read_dir(table_dir)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                p.is_dir()
-                    && p.file_name()
-                        .and_then(|n| n.to_str())
-                        .map_or(false, |n| n.starts_with("part_"))
-            })
-            .collect();
-        parts.sort();
-        parts.reverse();
-
-        let columns: Vec<ColumnSchema> = column_names
-            .iter()
-            .map(|name| {
-                table_schema
-                    .columns
-                    .iter()
-                    .find(|c| c.name == *name)
-                    .cloned()
-                    .ok_or_else(|| ExecutionError::InvalidData(format!("unknown column: {}", name)))
-            })
-            .collect::<Result<_, _>>()?;
-
-        // 3. Build the Arrow schema once and cache it. Every RecordBatch this
-        //    scan emits shares this exact Arc<Schema> — no per-batch alloc.
-        let fields: Vec<Field> = columns
-            .iter()
-            .map(|c| Field::new(&c.name, c.data_type.to_arrow(), false))
-            .collect();
-        let schema = Arc::new(Schema::new(fields));
-
-        Ok(Self {
-            parts,
+    pub fn new(work_source: Arc<dyn ScanWorkSource>, columns: Vec<ColumnSchema>, schema: Arc<Schema>) -> Self {
+        Self {
+            work_source, 
             columns,
             schema,
-        })
+        }
     }
 
     fn read_part(&self, part_dir: &Path) -> Result<RecordBatch, ExecutionError> {
@@ -95,20 +80,22 @@ impl FullScanExec {
     }
 }
 
-
 impl ExecutionPlan for FullScanExec {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
-        let part_dir = self.parts.pop()?;
-        Some(self.read_part(&part_dir))
-    }
+        let part_dir = self.work_source.next_work();
+        match part_dir {
+            Some(dir) => Some(self.read_part(&dir)),
+            None => None
 
+        }
+    }
     fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
         let indent = "  ".repeat(depth);
         let cols: Vec<&str> = self.columns.iter().map(|c| c.name.as_str()).collect();
         writeln!(f, "{}FullScan(cols=[{}])", indent, cols.join(", "))
     }
-
 }
+
 
 impl fmt::Display for FullScanExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
