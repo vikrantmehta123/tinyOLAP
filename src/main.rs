@@ -55,7 +55,7 @@ fn run_select(
     table_dir: &Path,
 ) -> Result<(), String> {
     let mut logical_plan = logical_plan::lower::lower(stmt, schema)?;
-    logical_plan = logical_plan::optimizer::Optimizer::new().optimize(logical_plan);
+    logical_plan = logical_plan::optimizer::Optimizer::new(&schema).optimize(logical_plan);
 
     let physical_plan = physical_plan::lower::lower(logical_plan);
     // TODO(TASK-004): re-enable physical optimizer once ZoneMapScanExec lands.

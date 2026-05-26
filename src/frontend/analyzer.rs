@@ -12,6 +12,31 @@ struct AnalyzerVisitor<'a> {
 }
 
 impl<'a> AnalyzerVisitor<'a> {
+    fn resolve_column_expr(&self, expr:&Expr) -> Result<Option<&crate::catalog::schema::ColumnSchema>, String> {
+        match expr {
+            Expr::Identifier(ident) => Ok(Some(self.resolve_column(&ident.value)?)),
+            Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
+                let table_name = &parts[0].value;
+                let col_name = &parts[1].value;
+
+                if table_name != &self.schema.name {
+                    return Err(format!("unknown table in qualified reference: {}", table_name));
+                }
+
+                Ok(Some(self.resolve_column(col_name)?))
+            }
+
+            _ => Ok(None),
+        }
+    }
+
+    fn literal_expr<'b>(&self, expr: &'b Expr) -> Option<&'b ValueWithSpan> {
+        match expr {
+            Expr::Value(value) => Some(value),
+            _ => None,
+        }
+    }
+
     fn resolve_column(&self, name: &str) -> Result<&crate::catalog::schema::ColumnSchema, String> {
         self.schema
             .columns
@@ -39,6 +64,38 @@ impl<'a> AnalyzerVisitor<'a> {
             }
             Value::SingleQuotedString(_) if col_is_numeric => {
                 Err("type mismatch: string literal compared to numeric column".to_string())
+            }
+            // Check range compatibility of the type. For instance, a value like 40_000 shouldn't be accepted for I8
+            Value::Number(s, _) => {
+                let (min, max): (i128, i128) = match data_type {
+                    DataType::I8  => (i8::MIN  as i128, i8::MAX  as i128),
+                    DataType::I16 => (i16::MIN as i128, i16::MAX as i128),
+                    DataType::I32 => (i32::MIN as i128, i32::MAX as i128),
+                    DataType::I64 => (i64::MIN as i128, i64::MAX as i128),
+                    DataType::U8  => (0, u8::MAX  as i128),
+                    DataType::U16 => (0, u16::MAX as i128),
+                    DataType::U32 => (0, u32::MAX as i128),
+                    DataType::U64 => (0, u64::MAX as i128),
+                    DataType::F32 | DataType::F64 => return Ok(()),
+                    _ => {
+                        return Err(format!(
+                            "type mismatch: numeric literal compared to {:?} column",
+                            data_type
+                        ));
+                    }
+                };
+
+                let n = s.parse::<i128>().map_err(|_| {
+                    format!("type mismatch: non-integer literal {} compared to integer column", s)
+                })?;
+                if n < min || n > max {
+                    return Err(format!(
+                        "literal {} is out of range for column type {:?} ({}..={})",
+                        s, data_type, min, max
+                    ));
+                }
+
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -84,17 +141,40 @@ impl<'a> Visitor for AnalyzerVisitor<'a> {
             }
             // Broad group check: numeric columns accept numeric literals, string
             // columns accept string literals. Mixing the two groups is rejected.
-            // We don't distinguish i32 from i64 at the SQL layer — that would
-            // surprise users writing plain integer literals.
             Expr::BinaryOp { left, right, .. } => {
-                if let (Expr::Identifier(ident), Expr::Value(val)) = (left.as_ref(), right.as_ref())
-                {
-                    if let Ok(col) = self.resolve_column(&ident.value) {
+                // We can either get (literal, column) or (column, literal). Two matches for that.
+                match (
+                    self.resolve_column_expr(left.as_ref()),
+                    self.literal_expr(right.as_ref()),
+                ) {
+                    (Ok(Some(col)), Some(val)) => {
                         if let Err(e) = self.check_type_compat(&col.data_type, val) {
                             self.error = Some(e);
                             return ControlFlow::Break(());
                         }
                     }
+                    (Err(e), _) => {
+                        self.error = Some(e);
+                        return ControlFlow::Break(());
+                    }
+                    _ => {}
+                }
+
+                match (
+                    self.literal_expr(left.as_ref()),
+                    self.resolve_column_expr(right.as_ref()),
+                ) {
+                    (Some(val), Ok(Some(col))) => {
+                        if let Err(e) = self.check_type_compat(&col.data_type, val) {
+                            self.error = Some(e);
+                            return ControlFlow::Break(());
+                        }
+                    }
+                    (_, Err(e)) => {
+                        self.error = Some(e);
+                        return ControlFlow::Break(());
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -190,4 +270,30 @@ mod tests {
         assert!(analyze_sql("SELECT id FROM users WHERE age > 30").is_ok());
     }
 
+    #[test]
+    fn i16_overflow_is_rejected() {
+        // 40000 exceeds i16::MAX (32767)
+        let schema = TableSchema {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnSchema { name: "country_id".to_string(), data_type: DataType::I16 },
+            ],
+            sort_key: vec![0],
+        };
+        let stmt = parse("SELECT country_id FROM users WHERE country_id = 40000").unwrap();
+        assert!(analyze(&stmt, &schema).is_err());
+    }
+
+    #[test]
+    fn i16_in_range_passes() {
+        let schema = TableSchema {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnSchema { name: "country_id".to_string(), data_type: DataType::I16 },
+            ],
+            sort_key: vec![0],
+        };
+        let stmt = parse("SELECT country_id FROM users WHERE country_id = 100").unwrap();
+        assert!(analyze(&stmt, &schema).is_ok());
+    }
 }

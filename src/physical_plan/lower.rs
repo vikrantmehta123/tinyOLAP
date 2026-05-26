@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::catalog::schema::DataType;
 use crate::logical_plan::logical_operators::{
     AggFunc as LogAggFunc, BinaryOp as LogBinaryOp, LiteralValue as LogLiteralValue, LogicalExpr,
     LogicalPlan,
@@ -55,6 +56,7 @@ fn collect_expr_columns(expr: &LogicalExpr, cols: &mut BTreeSet<String>) {
             collect_expr_columns(right, cols);
         }
         LogicalExpr::Aggregate { arg, .. } => collect_expr_columns(arg, cols),
+        LogicalExpr::Cast { expr, .. } => collect_expr_columns(expr, cols),
     }
 }
 
@@ -142,6 +144,13 @@ fn lower_expr(expr: LogicalExpr) -> PhysicalExpr {
         LogicalExpr::Aggregate { func, arg } => {
             PhysicalExpr::Column(format!("{}({})", agg_func_name(&func), expr_display(&arg)))
         }
+
+        LogicalExpr::Cast { expr, target_datatype } => match *expr {
+            LogicalExpr::Literal(lit) => {
+                PhysicalExpr::Literal(narrow_literal(lit, &target_datatype))
+            }
+            _ => panic!("Cast is only supported over literal operands"),
+        },
     }
 }
 
@@ -169,15 +178,41 @@ fn lower_agg_func(func: LogAggFunc) -> crate::physical_plan::physical_operators:
     }
 }
 
-fn lower_literal(lit: LogLiteralValue) -> crate::physical_plan::physical_operators::LiteralValue {
+fn lower_literal(lit: LogLiteralValue) -> PhysLiteralValue {
     match lit {
-        LogLiteralValue::Int(n) => PhysLiteralValue::Int(n),
-        LogLiteralValue::Float(f) => PhysLiteralValue::Float(f),
-        LogLiteralValue::Str(s) => PhysLiteralValue::Str(s),
-        LogLiteralValue::Bool(b) => PhysLiteralValue::Bool(b),
-        LogLiteralValue::Null => PhysLiteralValue::Null,
+        LogLiteralValue::Int(n)   => PhysLiteralValue::I64(n),
+        LogLiteralValue::Float(f) => PhysLiteralValue::F64(f),
+        LogLiteralValue::Str(s)   => PhysLiteralValue::Str(s),
+        LogLiteralValue::Bool(b)  => PhysLiteralValue::Bool(b),
+        LogLiteralValue::Null     => PhysLiteralValue::Null,
     }
 }
+
+fn narrow_literal(lit: LogLiteralValue, to: &DataType) -> PhysLiteralValue {
+    use LogLiteralValue as L;
+    match (lit, to) {
+        (L::Int(v), DataType::I8)  => PhysLiteralValue::I8(i8::try_from(v).expect("analyzer should have caught I8 overflow")),
+        (L::Int(v), DataType::I16) => PhysLiteralValue::I16(i16::try_from(v).expect("analyzer should have caught I16 overflow")),
+        (L::Int(v), DataType::I32) => PhysLiteralValue::I32(i32::try_from(v).expect("analyzer should have caught I32 overflow")),
+        (L::Int(v), DataType::I64) => PhysLiteralValue::I64(v),
+        (L::Int(v), DataType::U8)  => PhysLiteralValue::U8(u8::try_from(v).expect("analyzer should have caught U8 overflow")),
+        (L::Int(v), DataType::U16) => PhysLiteralValue::U16(u16::try_from(v).expect("analyzer should have caught U16 overflow")),
+        (L::Int(v), DataType::U32) => PhysLiteralValue::U32(u32::try_from(v).expect("analyzer should have caught U32 overflow")),
+        (L::Int(v), DataType::U64) => PhysLiteralValue::U64(u64::try_from(v).expect("analyzer should have caught U64 overflow")),
+        (L::Int(v), DataType::F32) => PhysLiteralValue::F32(v as f32),
+        (L::Int(v), DataType::F64) => PhysLiteralValue::F64(v as f64),
+
+        (L::Float(v), DataType::F32) => PhysLiteralValue::F32(v as f32),
+        (L::Float(v), DataType::F64) => PhysLiteralValue::F64(v),
+
+        (L::Str(s),  DataType::Str)  => PhysLiteralValue::Str(s),
+        (L::Bool(b), DataType::Bool) => PhysLiteralValue::Bool(b),
+
+        (lit, target) => panic!("analyzer should have rejected: cannot narrow {:?}-style literal to {:?}", std::mem::discriminant(&lit), target),
+    }
+}
+
+
 
 fn agg_func_name(func: &LogAggFunc) -> &'static str {
     match func {
@@ -200,7 +235,8 @@ fn expr_display(expr: &LogicalExpr) -> String {
         LogicalExpr::BinaryOp { .. } => "<expr>".to_string(),
         LogicalExpr::Aggregate { func, arg } => {
             format!("{}({})", agg_func_name(func), expr_display(arg))
-        }
+        }, 
+        LogicalExpr::Cast { expr, .. } => expr_display(expr),
     }
 }
 
@@ -272,7 +308,7 @@ mod tests {
                             (
                                 PhysicalExpr::Column(col),
                                 CmpOp::Gt,
-                                PhysicalExpr::Literal(LiteralValue::Int(30)),
+                                PhysicalExpr::Literal(LiteralValue::I64(30)),
                             ) => assert_eq!(col, "age"),
                             _ => panic!("unexpected predicate shape"),
                         },

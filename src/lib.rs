@@ -40,7 +40,7 @@ pub fn run_select_collect(
     }
 
     let mut logical_plan = logical_plan::lower::lower(&stmt, schema)?;
-    logical_plan = logical_plan::optimizer::Optimizer::new().optimize(logical_plan);
+    logical_plan = logical_plan::optimizer::Optimizer::new(schema).optimize(logical_plan);
 
     let physical_plan = physical_plan::lower::lower(logical_plan);
 
