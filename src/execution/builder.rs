@@ -20,6 +20,7 @@ use crate::execution::aggregation::sum::SumAccumulator;
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::execution::filter::FilterExec;
 use crate::execution::full_scan::{FullScanExec, PartWorkSource};
+use crate::execution::gather::GatherExec;
 use crate::execution::limit::LimitExec;
 use crate::execution::project::ProjectExec;
 use crate::physical_plan::physical_operators::{AggFunc, PhysicalExpr, PhysicalPlan};
@@ -27,6 +28,20 @@ use crate::physical_plan::physical_operators::{AggFunc, PhysicalExpr, PhysicalPl
 /// PhysicalPlan is pattern-matchable data;
 /// ExecutionPlan is the runtime with state and file handles.
 pub fn build(
+    plan: PhysicalPlan,
+    schema: &TableSchema,
+    table_dir: &Path,
+) -> Result<Box<dyn ExecutionPlan>, ExecutionError> {
+    let inner = build_inner(plan, schema, table_dir)?;
+    Ok(Box::new(GatherExec::new(1, inner)))
+}
+
+/// Currently, GatherExec is the root node for any plan.
+/// build_inner function builds the subtree whose parent GatherExec (root) will be.
+/// If we add support for JOINs, etc., then the builder has to undergo quite a few changes
+/// In such cases, the optimizer has a rule that inserts Scatter/Gather operators.
+/// Marking this as TODO
+fn build_inner(
     plan: PhysicalPlan,
     schema: &TableSchema,
     table_dir: &Path,
@@ -41,15 +56,15 @@ pub fn build(
         // Wrapping operators: build the child first, then wrap. Same shape
         // for all three — only the wrapper type differs.
         PhysicalPlan::Filter { predicate, input } => {
-            let child = build(*input, schema, table_dir)?;
+            let child = build_inner(*input, schema, table_dir)?;
             Ok(Box::new(FilterExec::new(predicate, child)))
         }
         PhysicalPlan::Project { projections, input } => {
-            let child = build(*input, schema, table_dir)?;
+            let child = build_inner(*input, schema, table_dir)?;
             Ok(Box::new(ProjectExec::new(projections, child)))
         }
         PhysicalPlan::Limit { limit, input } => {
-            let child = build(*input, schema, table_dir)?;
+            let child = build_inner(*input, schema, table_dir)?;
             Ok(Box::new(LimitExec::new(limit, child)))
         }
 
@@ -222,7 +237,7 @@ pub fn build(
                 accumulators.push(acc);
             }
 
-            let child = build(*input, schema, table_dir)?;
+            let child = build_inner(*input, schema, table_dir)?;
 
             let group_by_fields: Vec<Field> = group_by
                 .iter()
