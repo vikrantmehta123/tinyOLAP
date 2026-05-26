@@ -5,3 +5,4 @@
 /prompts
 /tests
 *.pdf
+/benches/data
