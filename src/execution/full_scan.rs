@@ -12,15 +12,22 @@ use crate::{
     execution::executor::{ExecutionError, ExecutionPlan}, storage::{column_reader::ColumnReader, string_column_reader::StringColumnReader},
 };
 
+/// This trait defines an abstraction for the FullScan operator
+/// Because of this trait, FullScan operator doesn't have to keep 
+/// track of what parts are read, especially in parallel scans
 pub trait ScanWorkSource {
     fn next_work(&self) -> Option<PathBuf>;
 }
 
 pub struct PartWorkSource{
     parts: Vec<PathBuf>,
-    next: AtomicUsize,
+    next: AtomicUsize, // The index in the parts vector upto which workers have read
 }
 
+/// For the moment, we have a PartWorkSource.
+/// We expect to implement a GranuleWorkSource later.
+/// This represents a Handle that the workers use when
+/// executig the FullScan operator
 impl PartWorkSource {
     pub fn new(parts: Vec<PathBuf>) -> Self {
         Self {
@@ -52,6 +59,8 @@ impl FullScanExec {
         }
     }
 
+    /// Given a path to a part, reads the data and casts it into a RecordBatch
+    /// All subsequent query processing operators use RecordBatch as input
     fn read_part(&self, part_dir: &Path) -> Result<RecordBatch, ExecutionError> {
         let arrays: Vec<ArrayRef> = self
             .columns
@@ -81,6 +90,10 @@ impl FullScanExec {
 }
 
 impl ExecutionPlan for FullScanExec {
+
+    /// Gets the handle from the WorkSource and performs the read operation
+    /// For the moment, parallelization is at a granularity of a Part.
+    /// TODO: Later, we want to move from part level granularity to a granule based one
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
         let part_dir = self.work_source.next_work();
         match part_dir {
@@ -96,7 +109,7 @@ impl ExecutionPlan for FullScanExec {
     }
 }
 
-
+/// Pretty Print the operator
 impl fmt::Display for FullScanExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.fmt_indented(f, 0)

@@ -1,3 +1,6 @@
+//! This module converts a Physical plan into a tree of ExecutionPlan operators
+//! ExecutionPlan operators actually execute the query
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,11 +24,8 @@ use crate::execution::limit::LimitExec;
 use crate::execution::project::ProjectExec;
 use crate::physical_plan::physical_operators::{AggFunc, PhysicalExpr, PhysicalPlan};
 
-/// Turns a PhysicalPlan (intent, post-optimizer) into a tree of running
-/// ExecutionPlan operators. PhysicalPlan is pattern-matchable data;
-/// ExecutionPlan is the runtime with state and file handles. Keeping them
-/// separate means the optimizer never thinks about runtime, and operators
-/// never think about rewrites.
+/// PhysicalPlan is pattern-matchable data;
+/// ExecutionPlan is the runtime with state and file handles.
 pub fn build(
     plan: PhysicalPlan,
     schema: &TableSchema,
@@ -34,44 +34,8 @@ pub fn build(
     match plan {
         // Leaf: construct the scan operator directly.
         PhysicalPlan::FullScan { columns, .. } => {
-            let mut parts: Vec<PathBuf> = fs::read_dir(table_dir)?
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.is_dir()
-                        && p.file_name()
-                            .and_then(|n| n.to_str())
-                            .map_or(false, |n| n.starts_with("part_"))
-                })
-                .collect();
-            parts.sort();
-            parts.reverse();
-
-            let columns: Vec<ColumnSchema> = columns
-                .iter()
-                .map(|name| {
-                    schema
-                        .columns
-                        .iter()
-                        .find(|c| c.name == *name)
-                        .cloned()
-                        .ok_or_else(|| ExecutionError::InvalidData(format!("unknown column: {}", name)))
-                })
-                .collect::<Result<_, _>>()?;
-
-            // 3. Build the Arrow schema once and cache it. Every RecordBatch this
-            //    scan emits shares this exact Arc<Schema> — no per-batch alloc.
-            let fields: Vec<Field> = columns
-                .iter()
-                .map(|c| Field::new(&c.name, c.data_type.to_arrow(), false))
-                .collect();
-            let arrow_schema = Arc::new(Schema::new(fields));
-
-            let ws = Arc::new(PartWorkSource::new(parts));
-
-            let exec = FullScanExec::new(ws, columns, arrow_schema);
-
-            Ok(Box::new(exec))
+            let full_scan_operator = construct_full_scan_operator(table_dir, columns, schema)?;
+            Ok(full_scan_operator)
         }
 
         // Wrapping operators: build the child first, then wrap. Same shape
@@ -89,11 +53,15 @@ pub fn build(
             Ok(Box::new(LimitExec::new(limit, child)))
         }
 
+        // For aggregates, there is only operator even if you have multiple aggregations
+        // HashAggregateExec handles multiple group bys, multiple aggregations
         PhysicalPlan::Aggregate {
             group_by,
             aggregates,
             input,
         } => {
+
+            // We can have more than one aggregate in the query. Hence, one accumulator per aggregation
             let mut accumulators: Vec<Box<dyn Accumulator>> = Vec::with_capacity(aggregates.len());
             for spec in &aggregates {
                 let column_name = match &spec.arg {
@@ -292,4 +260,50 @@ pub fn build(
             unimplemented!("ZoneMapScanExec lands in TASK-004")
         }
     }
+}
+
+/// Helper function that constructs the full scan operator for the builder
+fn construct_full_scan_operator(table_dir: &Path, columns: Vec<String>, schema: &TableSchema) -> Result<Box<dyn ExecutionPlan>, ExecutionError> {
+    
+    // For now, we assume that there is only one directory for the table
+    // TODO: Later, we may want to add partitions/multiple tables. 
+    // Then this code will have to change
+    let mut parts: Vec<PathBuf> = fs::read_dir(table_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map_or(false, |n| n.starts_with("part_"))
+        })
+        .collect();
+    parts.sort();
+    parts.reverse();
+
+    let columns: Vec<ColumnSchema> = columns
+        .iter()
+        .map(|name| {
+            schema
+                .columns
+                .iter()
+                .find(|c| c.name == *name)
+                .cloned()
+                .ok_or_else(|| ExecutionError::InvalidData(format!("unknown column: {}", name)))
+        })
+        .collect::<Result<_, _>>()?;
+
+    // Build the Arrow schema once per query. Every RecordBatch this
+    // scan emits shares this exact Arc<Schema>. 
+    // Creating this schema in the builder means the executor doesn't have to create
+    // it for every batch.
+    let fields: Vec<Field> = columns
+        .iter()
+        .map(|c| Field::new(&c.name, c.data_type.to_arrow(), false))
+        .collect();
+    let arrow_schema = Arc::new(Schema::new(fields));
+
+    let ws = Arc::new(PartWorkSource::new(parts));
+
+    Ok(Box::new(FullScanExec::new(ws, columns, arrow_schema)))
 }
