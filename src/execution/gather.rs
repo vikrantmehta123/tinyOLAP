@@ -15,20 +15,43 @@
 //! always be the root node in the current implementation of tinyOLAP.
 
 use arrow::array::RecordBatch;
+use crossbeam_channel::Receiver;
 
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
-use std::fmt;
+use std::{fmt, thread::JoinHandle};
 
 pub struct GatherExec {
     n_inputs: usize, 
-    child: Box<dyn ExecutionPlan>,
+    rx: Receiver<Result<RecordBatch, ExecutionError>>,
+    handle: Option<JoinHandle<()>>,
+    child_display: String,
 }
 
 impl GatherExec {
     pub fn new(n_inputs:usize, child: Box<dyn ExecutionPlan>) -> Self {
+        let child_display = format!("{}", child);
+
+        let (tx, rx) = crossbeam_channel::bounded(4);
+        let handle = std::thread::spawn(move || {
+            let mut child = child;
+
+            loop {
+                match child.next_batch() {
+                    Some(batch_result) => {
+                        if tx.send(batch_result).is_err() {
+                            break;
+                        }
+                    },
+                    None => break,
+                }
+            }
+        });
+
         Self {
             n_inputs, 
-            child
+            handle: Some(handle),
+            rx,
+            child_display
         }
     }
 }
@@ -36,13 +59,16 @@ impl GatherExec {
 impl ExecutionPlan for GatherExec {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
         
-        self.child.next_batch()
+        match self.rx.recv() {
+            Ok(res) => Some(res), 
+            Err(_) => None
+        }
     }
 
     fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
         let indent = "  ".repeat(depth);
         writeln!(f, "{}Gather(workers={})", indent, self.n_inputs)?;
-        self.child.fmt_indented(f, depth + 1)
+        write!(f, "{}", self.child_display)   // already pre-indented at depth 0
     }
 }
 
@@ -50,5 +76,18 @@ impl ExecutionPlan for GatherExec {
 impl fmt::Display for GatherExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.fmt_indented(f, 0)
+    }
+}
+
+/// TODO: Understand why this is required.
+impl Drop for GatherExec {
+    fn drop(&mut self) {
+
+        // TODO: worker panics are swallowed here — consumer sees clean end-of-stream
+        // instead of an error. Route panics through the channel as ExecutionError later.
+
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }

@@ -16,7 +16,7 @@ use crate::execution::executor::ExecutionError;
 /// (SumAccumulator<T>, CountAccumulator, AvgAccumulator, etc.).
 /// HashAggregateExec drives a Vec<Box<dyn Accumulator>> — feeds each batch
 /// to every accumulator via update(), then collects finalize() results.
-pub trait Accumulator {
+pub trait Accumulator: Send {
     // Update the Accumulator's state with this batch
     fn update(
         &mut self,

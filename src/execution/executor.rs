@@ -8,7 +8,7 @@ pub enum ExecutionError {
     Arrow(arrow::error::ArrowError),
 }
 
-pub trait ExecutionPlan: fmt::Display {
+pub trait ExecutionPlan: fmt::Display + Send {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>>;
     fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result;
 }

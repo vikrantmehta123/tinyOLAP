@@ -15,7 +15,7 @@ use crate::{
 /// This trait defines an abstraction for the FullScan operator
 /// Because of this trait, FullScan operator doesn't have to keep 
 /// track of what parts are read, especially in parallel scans
-pub trait ScanWorkSource {
+pub trait ScanWorkSource: Send + Sync {
     fn next_work(&self) -> Option<PathBuf>;
 }
 

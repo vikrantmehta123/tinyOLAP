@@ -27,7 +27,7 @@ where
     // This widened type needs to have a default value (e.g. 0),
     // it needs to support +, += operations,
     // And it should be possible to Copy it on stack
-    type Widened: Default + AddAssign + Copy;
+    type Widened: Default + AddAssign + Copy + Send;
 
     // The arrow datatype for the output schema defined using Field::new
     const OUTPUT_DATATYPE: DataType;
