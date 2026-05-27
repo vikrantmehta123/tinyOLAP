@@ -10,6 +10,7 @@ use arrow::datatypes::{
 };
 
 use crate::catalog::schema::{ColumnSchema, DataType, TableSchema};
+use crate::config::N_WORKERS;
 use crate::execution::aggregation::Accumulator;
 use crate::execution::aggregation::avg::AvgAccumulator;
 use crate::execution::aggregation::count::CountAccumulator;
@@ -32,8 +33,32 @@ pub fn build(
     schema: &TableSchema,
     table_dir: &Path,
 ) -> Result<Box<dyn ExecutionPlan>, ExecutionError> {
-    let inner = build_inner(plan, schema, table_dir)?;
-    Ok(Box::new(GatherExec::new(1, inner)))
+
+    // For now, we assume that there is only one directory for the table
+    // TODO: Later, we may want to add partitions/multiple tables. 
+    // Then this code will have to change
+    let mut parts: Vec<PathBuf> = fs::read_dir(table_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map_or(false, |n| n.starts_with("part_"))
+        })
+        .collect();
+    parts.sort();
+    parts.reverse();
+
+    let ws = Arc::new(PartWorkSource::new(parts));
+
+    let mut children: Vec<Box<dyn ExecutionPlan>> = Vec::new();
+    for _ in 0..N_WORKERS{
+        let inner = build_inner(plan.clone(), schema, &ws)?;
+        children.push(inner);
+    }
+
+    Ok(Box::new(GatherExec::new(N_WORKERS, children)))
 }
 
 /// Currently, GatherExec is the root node for any plan.
@@ -44,27 +69,27 @@ pub fn build(
 fn build_inner(
     plan: PhysicalPlan,
     schema: &TableSchema,
-    table_dir: &Path,
+    worksource: &Arc<PartWorkSource>,
 ) -> Result<Box<dyn ExecutionPlan>, ExecutionError> {
     match plan {
         // Leaf: construct the scan operator directly.
         PhysicalPlan::FullScan { columns, .. } => {
-            let full_scan_operator = construct_full_scan_operator(table_dir, columns, schema)?;
+            let full_scan_operator = construct_full_scan_operator(worksource, columns, schema)?;
             Ok(full_scan_operator)
         }
 
         // Wrapping operators: build the child first, then wrap. Same shape
         // for all three — only the wrapper type differs.
         PhysicalPlan::Filter { predicate, input } => {
-            let child = build_inner(*input, schema, table_dir)?;
+            let child = build_inner(*input, schema, worksource)?;
             Ok(Box::new(FilterExec::new(predicate, child)))
         }
         PhysicalPlan::Project { projections, input } => {
-            let child = build_inner(*input, schema, table_dir)?;
+            let child = build_inner(*input, schema, worksource)?;
             Ok(Box::new(ProjectExec::new(projections, child)))
         }
         PhysicalPlan::Limit { limit, input } => {
-            let child = build_inner(*input, schema, table_dir)?;
+            let child = build_inner(*input, schema, worksource)?;
             Ok(Box::new(LimitExec::new(limit, child)))
         }
 
@@ -237,7 +262,7 @@ fn build_inner(
                 accumulators.push(acc);
             }
 
-            let child = build_inner(*input, schema, table_dir)?;
+            let child = build_inner(*input, schema, worksource)?;
 
             let group_by_fields: Vec<Field> = group_by
                 .iter()
@@ -278,23 +303,7 @@ fn build_inner(
 }
 
 /// Helper function that constructs the full scan operator for the builder
-fn construct_full_scan_operator(table_dir: &Path, columns: Vec<String>, schema: &TableSchema) -> Result<Box<dyn ExecutionPlan>, ExecutionError> {
-    
-    // For now, we assume that there is only one directory for the table
-    // TODO: Later, we may want to add partitions/multiple tables. 
-    // Then this code will have to change
-    let mut parts: Vec<PathBuf> = fs::read_dir(table_dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_dir()
-                && p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map_or(false, |n| n.starts_with("part_"))
-        })
-        .collect();
-    parts.sort();
-    parts.reverse();
+fn construct_full_scan_operator(worksource: &Arc<PartWorkSource>, columns: Vec<String>, schema: &TableSchema) -> Result<Box<dyn ExecutionPlan>, ExecutionError> {
 
     let columns: Vec<ColumnSchema> = columns
         .iter()
@@ -318,7 +327,5 @@ fn construct_full_scan_operator(table_dir: &Path, columns: Vec<String>, schema: 
         .collect();
     let arrow_schema = Arc::new(Schema::new(fields));
 
-    let ws = Arc::new(PartWorkSource::new(parts));
-
-    Ok(Box::new(FullScanExec::new(ws, columns, arrow_schema)))
+    Ok(Box::new(FullScanExec::new(worksource.clone(), columns, arrow_schema)))
 }

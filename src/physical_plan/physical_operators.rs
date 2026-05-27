@@ -10,6 +10,7 @@ pub enum LiteralValue {
     Null,
 }
 
+#[derive(Clone)]
 pub enum CmpOp {
     Eq,
     NotEq,
@@ -19,12 +20,13 @@ pub enum CmpOp {
     GtEq,
 }
 
+#[derive(Clone)]
 pub enum LogicalOp {
     And,
     Or,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AggFunc {
     Count,
     Sum,
@@ -39,6 +41,7 @@ pub enum AggFunc {
 // Instead, aggregate functions are represented as AggSpec on PhysicalPlan::Aggregate.
 // By the time downstream operators (e.g. Project) see the data, the aggregate result
 // is already materialized as a named column in the batch — referenced as Column("sum(age)").
+#[derive(Clone)]
 pub enum PhysicalExpr {
     Column(String),
     Literal(LiteralValue),
@@ -54,12 +57,14 @@ pub enum PhysicalExpr {
     }
 }
 
+#[derive(Clone)]
 pub struct AggSpec {
     pub func: AggFunc,
     pub arg: PhysicalExpr,
     pub output_name: String,
 }
 
+#[derive(Clone)]
 pub enum PhysicalPlan {
     FullScan {
         table: String,

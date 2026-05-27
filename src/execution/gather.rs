@@ -22,35 +22,41 @@ use std::{fmt, thread::JoinHandle};
 
 pub struct GatherExec {
     n_inputs: usize, 
-    rx: Receiver<Result<RecordBatch, ExecutionError>>,
-    handle: Option<JoinHandle<()>>,
+    rx: Option<Receiver<Result<RecordBatch, ExecutionError>>>,
+    handles: Vec<Option<JoinHandle<()>>>,
     child_display: String,
 }
 
 impl GatherExec {
-    pub fn new(n_inputs:usize, child: Box<dyn ExecutionPlan>) -> Self {
-        let child_display = format!("{}", child);
+    pub fn new(n_inputs:usize, children: Vec<Box<dyn ExecutionPlan>>) -> Self {
+        let child_display = format!("{}", children[0]);
 
-        let (tx, rx) = crossbeam_channel::bounded(4);
-        let handle = std::thread::spawn(move || {
-            let mut child = child;
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let mut handles = Vec::with_capacity(n_inputs);
 
-            loop {
-                match child.next_batch() {
-                    Some(batch_result) => {
-                        if tx.send(batch_result).is_err() {
-                            break;
-                        }
-                    },
-                    None => break,
+        for child in children {
+            let tx = tx.clone();
+            let handle = std::thread::spawn(move || {
+                let mut child = child;
+                loop {
+                    
+                    match child.next_batch() {
+                        Some(batch_result) => {
+                            if tx.send(batch_result).is_err() {
+                                break;
+                            }
+                        },
+                        None => break,
+                    }
                 }
-            }
-        });
+            });
+            handles.push(Some(handle));
+        }
 
         Self {
             n_inputs, 
-            handle: Some(handle),
-            rx,
+            handles,
+            rx: Some(rx),
             child_display
         }
     }
@@ -59,7 +65,7 @@ impl GatherExec {
 impl ExecutionPlan for GatherExec {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
         
-        match self.rx.recv() {
+        match self.rx.as_ref().unwrap().recv() {
             Ok(res) => Some(res), 
             Err(_) => None
         }
@@ -82,12 +88,15 @@ impl fmt::Display for GatherExec {
 /// TODO: Understand why this is required.
 impl Drop for GatherExec {
     fn drop(&mut self) {
+        drop(self.rx.take());
 
-        // TODO: worker panics are swallowed here — consumer sees clean end-of-stream
-        // instead of an error. Route panics through the channel as ExecutionError later.
-
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+        for slot in &mut self.handles {
+            // TODO: worker panics are swallowed here — consumer sees clean end-of-stream
+            // instead of an error. Route panics through the channel as ExecutionError later.
+            if let Some(handle) = slot.take() {
+                let _ = handle.join();
+            }
         }
+
     }
 }
