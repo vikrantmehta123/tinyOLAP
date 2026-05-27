@@ -74,10 +74,14 @@ impl ExecutionPlan for GatherExec {
     fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
         let indent = "  ".repeat(depth);
         writeln!(f, "{}Gather(workers={})", indent, self.n_inputs)?;
-        write!(f, "{}", self.child_display)   // already pre-indented at depth 0
+        let child_shift = "  ".repeat(depth + 1);
+        for line in self.child_display.lines() {
+            writeln!(f, "{}{}", child_shift, line)?;
+        }
+        Ok(())
     }
 }
-
+ 
 /// Pretty Print the operator
 impl fmt::Display for GatherExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

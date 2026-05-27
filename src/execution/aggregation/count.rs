@@ -46,7 +46,28 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
-    fn finalize(&mut self) -> ArrayRef {
+    fn merge(&mut self, batch: &RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
+        if self.counts.len() < num_groups {
+            self.counts.resize(num_groups, 0);
+        }
+
+        let field = self.output_field();
+        let colname = field.name();
+        let col_ref = batch.column_by_name(colname).ok_or_else(|| ExecutionError::InvalidData(colname.to_string()))?; 
+
+        let arr = col_ref
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("MergeCountExec: The downcast array type doesn't match.");
+
+        // Merge operation for COUNT function is the sum of values
+        for (row_idx, &gi) in group_indices.iter().enumerate() {
+            self.counts[gi as usize] += arr.value(row_idx);
+        }
+        Ok(())
+    }
+
+    fn materialize(&mut self) -> ArrayRef {
         Arc::new(UInt64Array::from(std::mem::take(&mut self.counts)))
     }
 

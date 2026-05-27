@@ -70,6 +70,10 @@ impl Accumulator for AvgAccumulator
         Ok(())
     }
 
+    fn merge(&mut self, batch: &arrow::array::RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
+            todo!("merge not implemented for SumAccumulator yet")
+    }
+
     fn output_field(&self) -> Field {
         // AVG output will always be Float64
         Field::new(
@@ -79,7 +83,7 @@ impl Accumulator for AvgAccumulator
         )
     }
 
-    fn finalize(&mut self) -> ArrayRef {
+    fn materialize(&mut self) -> ArrayRef {
         let sums = std::mem::take(&mut self.running_sums);
         let counts = std::mem::take(&mut self.running_counts);
 

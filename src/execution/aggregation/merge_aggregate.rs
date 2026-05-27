@@ -1,17 +1,14 @@
-use std::fmt;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
-use arrow::datatypes::Field;
-use arrow::row::{OwnedRow, RowConverter, SortField};
 use arrow::{
     array::{ArrayRef, RecordBatch},
-    datatypes::Schema,
+    datatypes::{Field, Schema},
+    row::{OwnedRow, RowConverter, SortField},
 };
 
-use crate::execution::aggregation::Accumulator;
-use crate::execution::executor::{ExecutionError, ExecutionPlan};
+use crate::execution::{aggregation::Accumulator, executor::ExecutionPlan};
 
-pub struct HashAggregateExec {
+pub struct MergeAggregateExec {
     child: Box<dyn ExecutionPlan>,
     output_schema: Arc<Schema>,
     emitted: bool,
@@ -23,7 +20,9 @@ pub struct HashAggregateExec {
     group_values: Vec<OwnedRow>, // group_values[i] == group_index to actual group mapping.
 }
 
-impl HashAggregateExec {
+impl MergeAggregateExec {
+    /// Exactly same constructor as HashAggregateExec
+    /// TODO: Check if the duplication can be eliminated
     pub fn new(
         mut accumulators: Vec<Box<dyn Accumulator>>,
         child: Box<dyn ExecutionPlan>,
@@ -63,14 +62,16 @@ impl HashAggregateExec {
     }
 }
 
-impl fmt::Display for HashAggregateExec {
+impl fmt::Display for MergeAggregateExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.fmt_indented(f, 0)
     }
 }
 
-impl ExecutionPlan for HashAggregateExec {
-    fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
+impl ExecutionPlan for MergeAggregateExec {
+    fn next_batch(
+        &mut self,
+    ) -> Option<Result<arrow::array::RecordBatch, crate::execution::executor::ExecutionError>> {
         if self.emitted {
             return None;
         }
@@ -82,54 +83,45 @@ impl ExecutionPlan for HashAggregateExec {
                 Some(Err(e)) => return Some(Err(e)),
             };
 
-            // The i'th row in the batch belongs to the group -> group_indices[i]
-            let mut group_indices;
-            let num_groups; // there are num_groups unique groups in the batch
+            let group_by_arrays: Vec<ArrayRef> = self
+                .group_by_fields
+                .iter()
+                .map(|f| {
+                    batch
+                        .column_by_name(f.name())
+                        .expect("group-by column missing from batch — planner bug")
+                        .clone()
+                })
+                .collect();
 
-            // No GROUP BY clause in the query.
-            if self.group_by_fields.is_empty() {
-                group_indices = vec![0u32; batch.num_rows()];
-                num_groups = 1usize;
-            } else {
-                let group_by_arrays: Vec<ArrayRef> = self
-                    .group_by_fields
-                    .iter()
-                    .map(|f| {
-                        batch
-                            .column_by_name(f.name())
-                            .expect("group-by column missing from batch — planner bug")
-                            .clone()
-                    })
-                    .collect();
-
-                let rows = match self.row_converter.convert_columns(&group_by_arrays) {
-                    Ok(r) => r,
-                    Err(e) => return Some(Err(e.into())),
-                };
-
-                group_indices = Vec::with_capacity(batch.num_rows());
-
-                for row in rows.iter() {
-                    let key = row.owned();
-                    let idx = match self.group_to_index.get(&key) {
-                        Some(&existing) => existing,
-                        None => {
-                            let new_idx = self.group_values.len() as u32;
-
-                            self.group_values.push(key.clone());
-                            self.group_to_index.insert(key, new_idx);
-                            new_idx
-                        }
-                    };
-
-                    group_indices.push(idx);
-                }
-
-                num_groups = self.group_values.len();
+            let rows = match self.row_converter.convert_columns(&group_by_arrays) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e.into())),
             };
 
+            // The i'th row in the batch belongs to the group -> group_indices[i]
+            let mut group_indices = Vec::with_capacity(batch.num_rows());
+
+            for row in rows.iter() {
+                let key = row.owned();
+                let idx = match self.group_to_index.get(&key) {
+                    Some(&existing) => existing,
+                    None => {
+                        let new_idx = self.group_values.len() as u32;
+
+                        self.group_values.push(key.clone());
+                        self.group_to_index.insert(key, new_idx);
+                        new_idx
+                    }
+                };
+
+                group_indices.push(idx);
+            }
+
+            let num_groups = self.group_values.len();
+
             for acc in self.accumulators.iter_mut() {
-                if let Err(e) = acc.update(&batch, &group_indices, num_groups) {
+                if let Err(e) = acc.merge(&batch, &group_indices, num_groups) {
                     return Some(Err(e));
                 }
             }
@@ -184,7 +176,7 @@ impl ExecutionPlan for HashAggregateExec {
 
         writeln!(
             f,
-            "{}HashAggregate(group_by=[{}], aggregates=[{}])",
+            "{}MergeAggregateExec(group_by=[{}], aggregates=[{}])",
             indent,
             group_by_names.join(", "),
             agg_names.join(", "),

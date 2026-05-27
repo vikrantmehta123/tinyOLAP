@@ -59,9 +59,15 @@ fn run_select(
 
     let physical_plan = physical_plan::lower::lower(logical_plan);
     // TODO(TASK-004): re-enable physical optimizer once ZoneMapScanExec lands.
+    
+    println!("{}", physical_plan);
+
 
     let mut plan = build(physical_plan, schema, table_dir)
         .map_err(|e| e.to_string())?;
+
+    println!("{}", plan);
+
 
     let mut batches: Vec<RecordBatch> = Vec::new();
     loop {

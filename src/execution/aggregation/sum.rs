@@ -196,6 +196,10 @@ where
         Ok(())
     }
 
+    fn merge(&mut self, batch: &RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
+        todo!("merge not implemented for SumAccumulator yet")
+    }
+
     fn output_field(&self) -> Field {
         Field::new(
             format!("sum({})", self.column_name),
@@ -204,7 +208,7 @@ where
         )
     }
 
-    fn finalize(&mut self) -> ArrayRef {
+    fn materialize(&mut self) -> ArrayRef {
         T::into_array(std::mem::take(&mut self.running_sums))
     }
 

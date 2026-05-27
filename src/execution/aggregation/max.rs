@@ -100,11 +100,15 @@ where
         Ok(())
     }
 
+    fn merge(&mut self, batch: &arrow::array::RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
+        todo!("merge not implemented for SumAccumulator yet")
+    }
+
     fn output_field(&self) -> Field {
         Field::new(format!("max({})", self.column_name), T::DATA_TYPE, false)
     }
 
-    fn finalize(&mut self) -> ArrayRef {
+    fn materialize(&mut self) -> ArrayRef {
         Arc::new(PrimitiveArray::<T>::from_iter_values(std::mem::take(
             &mut self.running_maximums,
         )))
