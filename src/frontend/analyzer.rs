@@ -191,7 +191,7 @@ pub fn analyze(stmt: &Statement, schema: &TableSchema) -> Result<(), String> {
                 schema,
                 error: None,
             };
-            stmt.visit(&mut visitor);
+            let _ = stmt.visit(&mut visitor);
             match visitor.error {
                 Some(e) => Err(e),
                 None => Ok(()),

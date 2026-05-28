@@ -62,7 +62,7 @@ pub fn build(
     let gather = Box::new(GatherExec::new(N_WORKERS, children));
     let result: Box<dyn ExecutionPlan> = match find_aggregate(&plan) {
         Some((group_by, aggregates)) => {
-            let accumulators = build_accumulators(aggregates, schema)?;
+            let accumulators = build_accumulators(aggregates, schema, false)?;
             let group_by_fields = build_group_by_fields(group_by, schema)?;
             Box::new(MergeAggregateExec::new(accumulators, gather, group_by_fields))
         }
@@ -116,6 +116,7 @@ fn build_group_by_fields(
 fn build_accumulators(
     aggregates: &[AggSpec],
     schema: &TableSchema,
+    is_partial: bool,
 ) -> Result<Vec<Box<dyn Accumulator>>, ExecutionError> {
     // We can have more than one aggregate in the query. Hence, one accumulator per aggregation
     let mut accumulators: Vec<Box<dyn Accumulator>> = Vec::with_capacity(aggregates.len());
@@ -224,7 +225,7 @@ fn build_accumulators(
                     }
                 }
             }
-            AggFunc::Avg => Box::new(AvgAccumulator::new(column_name)),
+            AggFunc::Avg => Box::new(AvgAccumulator::new(column_name, is_partial)),
         };
 
         accumulators.push(acc);
@@ -272,7 +273,7 @@ fn build_inner(
             aggregates,
             input,
         } => {
-            let accumulators = build_accumulators(&aggregates, schema)?;
+            let accumulators = build_accumulators(&aggregates, schema, true)?;
 
             let child = build_inner(*input, schema, worksource)?;
 

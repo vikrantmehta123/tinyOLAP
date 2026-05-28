@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, Float64Array},
-    datatypes::Field,
+    array::{ArrayRef, Float64Array, StructArray, UInt64Array},
+    datatypes::{DataType, Field},
 };
 
 use crate::execution::{aggregation::Accumulator, executor::ExecutionError};
@@ -12,15 +12,17 @@ pub struct AvgAccumulator
     column_name: String,
     running_counts: Vec<u64>,
     running_sums: Vec<f64>,
+    is_partial: bool,
 }
 
 impl AvgAccumulator
 {
-    pub fn new(column_name: String) -> Self {
+    pub fn new(column_name: String, is_partial: bool) -> Self {
         Self {
             column_name,
             running_counts: Vec::new(),
             running_sums: Vec::new(),
+            is_partial,
         }
     }
 }
@@ -71,28 +73,65 @@ impl Accumulator for AvgAccumulator
     }
 
     fn merge(&mut self, batch: &arrow::array::RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
-            todo!("merge not implemented for SumAccumulator yet")
+        self.ensure_capacity(num_groups);
+        // The name matches whatever output_field() generated in the partial phase
+        let col_name = format!("avg({})", self.column_name);
+        let col_ref = batch.column_by_name(&col_name).unwrap();
+        // In the merge phase, the incoming column is a StructArray containing [sum, count]
+        let struct_arr = col_ref.as_any().downcast_ref::<StructArray>().unwrap();
+        
+        // Extract the internal arrays
+        let sums_arr = struct_arr.column(0).as_any().downcast_ref::<Float64Array>().unwrap();
+        let counts_arr = struct_arr.column(1).as_any().downcast_ref::<UInt64Array>().unwrap();
+        // Merge the partial states!
+        for (i, &gi) in group_indices.iter().enumerate() {
+            self.running_sums[gi as usize] += sums_arr.value(i);
+            self.running_counts[gi as usize] += counts_arr.value(i);
+        }
+        Ok(())
     }
 
     fn output_field(&self) -> Field {
-        // AVG output will always be Float64
-        Field::new(
-            format!("avg({})", self.column_name),
-            arrow::datatypes::DataType::Float64,
-            false,
-        )
+        let name = format!("avg({})", self.column_name);
+
+        // When returning partial results, we need to return both count and sum
+        // Wrap both in a Field of StructArray
+        if self.is_partial {
+            let fields = vec![
+                Field::new("sum", DataType::Float64, false),
+                Field::new("count", DataType::UInt64, false),
+            ];
+            Field::new(name, arrow::datatypes::DataType::Struct(fields.into()), false)
+        } else {
+            Field::new(name, arrow::datatypes::DataType::Float64, false)
+        }
     }
 
     fn materialize(&mut self) -> ArrayRef {
         let sums = std::mem::take(&mut self.running_sums);
         let counts = std::mem::take(&mut self.running_counts);
 
-        let averages = sums
-            .into_iter()
-            .zip(counts.into_iter())
-            .map(|(sum, count)| sum / count as f64);
+        if self.is_partial {
+            let sums_arr = Arc::new(Float64Array::from(sums)) as ArrayRef;
+            let counts_arr = Arc::new(UInt64Array::from(counts)) as ArrayRef;
+        
+            let fields = vec![
+                Field::new("sum", DataType::Float64, false),
+                Field::new("count", DataType::UInt64, false),
+            ];
 
-        Arc::new(Float64Array::from_iter_values(averages))
+            Arc::new(StructArray::from(vec![
+                (Arc::new(fields[0].clone()), sums_arr),
+                (Arc::new(fields[1].clone()), counts_arr),
+            ]))
+        } else {
+            let averages = sums
+                .into_iter()
+                .zip(counts.into_iter())
+                .map(|(sum, count)| sum / count as f64);
+
+            Arc::new(Float64Array::from_iter_values(averages))
+        }
     }
 
     fn ensure_capacity(&mut self, num_groups: usize) {
