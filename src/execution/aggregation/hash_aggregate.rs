@@ -25,16 +25,11 @@ pub struct HashAggregateExec {
 
 impl HashAggregateExec {
     pub fn new(
-        mut accumulators: Vec<Box<dyn Accumulator>>,
+        accumulators: Vec<Box<dyn Accumulator>>,
         child: Box<dyn ExecutionPlan>,
         group_by_fields: Vec<Field>,
     ) -> Self {
-        // If no GROUP BY clause, ensure we have one row with default output.
-        if group_by_fields.is_empty() {
-            for acc in accumulators.iter_mut() {
-                acc.ensure_capacity(1);
-            }
-        }
+        // This is partial aggregation. So we don't emit any rows if there are no rows seen in the batch
 
         // RowConverter requires SortField. Create those.
         let sort_fields: Vec<SortField> = group_by_fields
