@@ -114,7 +114,7 @@ mod tests {
         let predicate = PhysicalExpr::Compare {
             left: Box::new(col("age")),
             op: CmpOp::Gt,
-            right: Box::new(PhysicalExpr::Literal(LiteralValue::Int(30))),
+            right: Box::new(PhysicalExpr::Literal(LiteralValue::I64(30))),
         };
 
         let plan = PhysicalPlan::Filter {
@@ -135,7 +135,7 @@ mod tests {
                             (
                                 PhysicalExpr::Column(col),
                                 CmpOp::Gt,
-                                PhysicalExpr::Literal(LiteralValue::Int(30)),
+                                PhysicalExpr::Literal(LiteralValue::I64(30)),
                             ) => assert_eq!(col, "age"),
                             _ => panic!("unexpected predicate shape"),
                         }
@@ -171,7 +171,7 @@ mod tests {
             predicate: PhysicalExpr::Compare {
                 left: Box::new(col("age")),
                 op: CmpOp::Gt,
-                right: Box::new(PhysicalExpr::Literal(LiteralValue::Int(30))),
+                right: Box::new(PhysicalExpr::Literal(LiteralValue::I64(30))),
             },
             input: Box::new(PhysicalPlan::Aggregate {
                 group_by: vec![col("name")],

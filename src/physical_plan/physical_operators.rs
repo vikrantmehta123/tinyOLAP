@@ -2,13 +2,15 @@ use std::fmt;
 
 #[derive(Clone)]
 pub enum LiteralValue {
-    Int(i64),
-    Float(f64),
+    I8(i8),   I16(i16), I32(i32), I64(i64),
+    U8(u8),   U16(u16), U32(u32), U64(u64),
+    F32(f32), F64(f64),
     Str(String),
     Bool(bool),
     Null,
 }
 
+#[derive(Clone)]
 pub enum CmpOp {
     Eq,
     NotEq,
@@ -18,12 +20,13 @@ pub enum CmpOp {
     GtEq,
 }
 
+#[derive(Clone)]
 pub enum LogicalOp {
     And,
     Or,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AggFunc {
     Count,
     Sum,
@@ -38,6 +41,7 @@ pub enum AggFunc {
 // Instead, aggregate functions are represented as AggSpec on PhysicalPlan::Aggregate.
 // By the time downstream operators (e.g. Project) see the data, the aggregate result
 // is already materialized as a named column in the batch — referenced as Column("sum(age)").
+#[derive(Clone)]
 pub enum PhysicalExpr {
     Column(String),
     Literal(LiteralValue),
@@ -50,15 +54,17 @@ pub enum PhysicalExpr {
         left: Box<PhysicalExpr>,
         op: LogicalOp,
         right: Box<PhysicalExpr>,
-    },
+    }
 }
 
+#[derive(Clone)]
 pub struct AggSpec {
     pub func: AggFunc,
     pub arg: PhysicalExpr,
     pub output_name: String,
 }
 
+#[derive(Clone)]
 pub enum PhysicalPlan {
     FullScan {
         table: String,
@@ -129,11 +135,19 @@ impl PhysicalPlan {
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LiteralValue::Int(i)   => write!(f, "{}", i),
-            LiteralValue::Float(v) => write!(f, "{}", v),
-            LiteralValue::Str(s)   => write!(f, "'{}'", s),
-            LiteralValue::Bool(b)  => write!(f, "{}", b),
-            LiteralValue::Null     => write!(f, "NULL"),
+            LiteralValue::I8(v)  => write!(f, "{}", v),
+            LiteralValue::I16(v) => write!(f, "{}", v),
+            LiteralValue::I32(v) => write!(f, "{}", v),
+            LiteralValue::I64(v) => write!(f, "{}", v),
+            LiteralValue::U8(v)  => write!(f, "{}", v),
+            LiteralValue::U16(v) => write!(f, "{}", v),
+            LiteralValue::U32(v) => write!(f, "{}", v),
+            LiteralValue::U64(v) => write!(f, "{}", v),
+            LiteralValue::F32(v) => write!(f, "{}", v),
+            LiteralValue::F64(v) => write!(f, "{}", v),
+            LiteralValue::Str(s) => write!(f, "'{}'", s),
+            LiteralValue::Bool(b)=> write!(f, "{}", b),
+            LiteralValue::Null   => write!(f, "NULL"),
         }
     }
 }

@@ -210,28 +210,19 @@ const QUERIES: &[(&str, &str)] = &[
     //     column `ts`. Today scans all 25M rows; future ZoneMaps should
     //     skip nearly every granule since `ts` is monotonic per-part.
     //     The clearest demo target for ZoneMap when that lands.
-    //
-    //     TYPE-COERCION WORKAROUND: we want `WHERE country_id = 5` here
-    //     (low cardinality, ~0.5%), but integer literals always lower to
-    //     i64 and the filter operator doesn't widen — Int16 == Int64
-    //     fails in arrow. Using `ts` (i64) sidesteps the bug. Revert to
-    //     `WHERE country_id = 5` once the TypeCoercion optimizer rule
-    //     lands.
     ("Q3_filter_low_selectivity",
         "SELECT SUM(price) FROM events WHERE ts < 250000"),
 
-    // Q4: high-selectivity filter (~50% rows pass) on `user_id` — a
-    //     non-sort-aligned column. Future ZoneMaps will *not* help here
-    //     (user_id is random, every granule's min/max spans the full
-    //     range), so this measures filter operator cost without any
-    //     scan-skip benefit. Pairs with Q3: same filter cost, different
-    //     skip potential.
-    //
-    //     TYPE-COERCION WORKAROUND: we want `WHERE country_id < 100`
-    //     here for the same reason as Q3. Using `user_id` (i64) avoids
-    //     the i16-vs-i64 literal mismatch.
+    // Q4: high-selectivity filter (~50% rows pass) on `country_id` — a
+    //     non-sort-aligned column. ZoneMaps will *not* help here
+    //     (country_id is uniformly random in 0..200, so every granule's
+    //     min/max spans the full range), so this measures filter
+    //     operator cost without any scan-skip benefit. Pairs with Q3:
+    //     same filter cost, different skip potential. Also exercises
+    //     type coercion — i16 column compared against an i64 literal,
+    //     narrowed by the TypeCoercion optimizer rule at plan time.
     ("Q4_filter_high_selectivity",
-        "SELECT SUM(price) FROM events WHERE user_id < 500000"),
+        "SELECT SUM(price) FROM events WHERE country_id < 100"),
 
     // Q5: GROUP BY low-cardinality integer (~200 groups). Hash table
     //     fits comfortably in L2. Pure HashAggregate happy path.

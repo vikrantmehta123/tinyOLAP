@@ -101,7 +101,7 @@ one exists to make a specific perf signal visible.
 | Q1 | `Q1_scan_sum_single_column`       | Pure scan + SUM on one column. Best case for columnar. Baseline.     |
 | Q2 | `Q2_scan_many_aggregates`         | 5 accumulators on one scan — amortizes per-batch overhead.           |
 | Q3 | `Q3_filter_low_selectivity`       | ~0.5% rows pass. Future ZoneMap baseline (granule skipping).         |
-| Q4 | `Q4_filter_high_selectivity`      | ~50% rows pass. Filter cost without filter benefit.                  |
+| Q4 | `Q4_filter_high_selectivity`      | ~50% rows pass on random `country_id`. Filter cost + type coercion.  |
 | Q5 | `Q5_groupby_low_cardinality_int`  | ~200 int groups. Hash table fits L2. HashAggregate happy path.       |
 | Q6 | `Q6_groupby_high_cardinality_int` | ~1M int groups. Hash table blows cache. Future SortedAggregate win.  |
 | Q7 | `Q7_filter_plus_multikey_groupby` | Filter + 2-key GROUP BY + AVG. Operator-chain overhead.              |
@@ -118,12 +118,11 @@ SELECT SUM(price), AVG(quantity), MIN(duration_ms), MAX(duration_ms), COUNT(pric
 FROM events;
 
 -- Q3 (sort-aligned filter; ts ∈ [0, ~50M), so <250000 is ~0.5%)
--- TYPE-COERCION WORKAROUND — see note below. Intent: country_id = 5.
 SELECT SUM(price) FROM events WHERE ts < 250000;
 
--- Q4 (~50% of rows; user_id is random, not sort-aligned)
--- TYPE-COERCION WORKAROUND — see note below. Intent: country_id < 100.
-SELECT SUM(price) FROM events WHERE user_id < 500000;
+-- Q4 (~50% of rows; country_id is uniform in 0..200, not sort-aligned;
+--     also exercises type coercion — i16 column vs i64 literal)
+SELECT SUM(price) FROM events WHERE country_id < 100;
 
 -- Q5 (~200 groups)
 SELECT country_id, SUM(price) FROM events GROUP BY country_id;
@@ -161,29 +160,6 @@ SELECT event_type, SUM(price) FROM events GROUP BY event_type;
   CPU-bound today (parallelism, then SortedAggregate are the next wins);
   cold-cache mode adds platform complexity for little signal until I/O
   becomes the bottleneck.
-
-## Known workaround: integer-literal type coercion
-
-Q3 and Q4 were originally designed to filter on `country_id` (i16, 200
-distinct values) — `country_id = 5` for low selectivity and
-`country_id < 100` for high. They were rewritten to use `ts` and
-`user_id` (both i64) because of an engine gap:
-
-> Integer literals always lower to i64 (`LiteralValue::Int(i64)`), and
-> the filter operator (`src/execution/expr.rs`) builds the literal as an
-> `Int64Array` Scalar regardless of the column's actual type. Arrow's
-> comparison kernels require both sides to share a DataType, so
-> `country_id (Int16) = 5 (Int64)` is rejected with
-> "Invalid comparison operation: Int16 == Int64".
-
-The proper fix is a **TypeCoercion** rule in the logical optimizer that
-walks `Compare(Column(c), Literal(...))`, looks up `c`'s type, and
-inserts a `Cast` node around the literal. Tracked as a follow-up task
-(separate from this bench work). When it lands, Q3 should revert to
-`WHERE country_id = 5` and Q4 to `WHERE country_id < 100` — the
-semantics (~0.5% / ~50% selectivity) are preserved by the current i64
-substitutes but the original intent is closer to a real OLAP workload
-(filtering on small-int dimension columns).
 
 ## What this bench is NOT
 

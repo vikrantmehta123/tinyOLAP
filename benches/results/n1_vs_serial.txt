@@ -1,0 +1,16 @@
+queries/Q1_scan_sum_single_column
+                        time:   [376.55 ms 377.71 ms 379.02 ms]
+                        thrpt:  [65.959 Melem/s 66.188 Melem/s 66.393 Melem/s]
+                 change:
+                        time:   [+42.681% +49.383% +55.736%] (p = 0.00 < 0.05)
+                        thrpt:  [−35.789% −33.058% −29.914%]
+                        Performance has regressed.
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+queries/Q2_scan_many_aggregates
+                        time:   [1.3160 s 1.3240 s 1.3324 s]
+                        thrpt:  [18.764 Melem/s 18.881 Melem/s 18.997 Melem/s]
+                 change:
+                        time:   [+49.419% +52.718% +55.589%] (p = 0.00 < 0.05)
+                        thrpt:  [−35.728% −34.520% −33.074%]
+                        Performance has regressed.

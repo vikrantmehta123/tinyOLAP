@@ -2,7 +2,7 @@ use std::ops::AddAssign;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, ArrowNumericType, Float64Array, Int64Array, PrimitiveArray, RecordBatch, UInt64Array,
+    ArrayRef, ArrowNumericType, ArrowPrimitiveType, Float64Array, Int64Array, PrimitiveArray, RecordBatch, UInt64Array
 };
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{
@@ -27,7 +27,11 @@ where
     // This widened type needs to have a default value (e.g. 0),
     // it needs to support +, += operations,
     // And it should be possible to Copy it on stack
-    type Widened: Default + AddAssign + Copy;
+    type Widened: Default + AddAssign + Copy + Send;
+
+    // Used by the MergeAggregateExec. When merging, the type is already widened.
+    // So when we downcast_ref, we need not widen again.
+    type WidenedArrow: ArrowPrimitiveType<Native = Self::Widened>;
 
     // The arrow datatype for the output schema defined using Field::new
     const OUTPUT_DATATYPE: DataType;
@@ -39,6 +43,7 @@ where
 // The Summable trait implementations for all the Numeric types we support
 impl Summable for Int64Type {
     type Widened = i64;
+    type WidenedArrow = Int64Type;
     const OUTPUT_DATATYPE: DataType = DataType::Int64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -48,6 +53,7 @@ impl Summable for Int64Type {
 
 impl Summable for Int32Type {
     type Widened = i64;
+    type WidenedArrow = Int64Type;
     const OUTPUT_DATATYPE: DataType = DataType::Int64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -57,6 +63,7 @@ impl Summable for Int32Type {
 
 impl Summable for Int16Type {
     type Widened = i64;
+    type WidenedArrow = Int64Type;
     const OUTPUT_DATATYPE: DataType = DataType::Int64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -66,6 +73,7 @@ impl Summable for Int16Type {
 
 impl Summable for Int8Type {
     type Widened = i64;
+    type WidenedArrow = Int64Type;
     const OUTPUT_DATATYPE: DataType = DataType::Int64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -75,6 +83,7 @@ impl Summable for Int8Type {
 
 impl Summable for UInt64Type {
     type Widened = u64;
+    type WidenedArrow = UInt64Type;
     const OUTPUT_DATATYPE: DataType = DataType::UInt64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -84,6 +93,7 @@ impl Summable for UInt64Type {
 
 impl Summable for UInt32Type {
     type Widened = u64;
+    type WidenedArrow = UInt64Type;
     const OUTPUT_DATATYPE: DataType = DataType::UInt64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -93,6 +103,7 @@ impl Summable for UInt32Type {
 
 impl Summable for UInt16Type {
     type Widened = u64;
+    type WidenedArrow = UInt64Type;
     const OUTPUT_DATATYPE: DataType = DataType::UInt64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -102,6 +113,7 @@ impl Summable for UInt16Type {
 
 impl Summable for UInt8Type {
     type Widened = u64;
+    type WidenedArrow = UInt64Type;
     const OUTPUT_DATATYPE: DataType = DataType::UInt64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -111,6 +123,7 @@ impl Summable for UInt8Type {
 
 impl Summable for Float32Type {
     type Widened = f64;
+    type WidenedArrow = Float64Type;
     const OUTPUT_DATATYPE: DataType = DataType::Float64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -120,6 +133,7 @@ impl Summable for Float32Type {
 
 impl Summable for Float64Type {
     type Widened = f64;
+    type WidenedArrow = Float64Type;
     const OUTPUT_DATATYPE: DataType = DataType::Float64;
 
     fn into_array(values: Vec<Self::Widened>) -> ArrayRef {
@@ -196,6 +210,28 @@ where
         Ok(())
     }
 
+    fn merge(&mut self, batch: &RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
+        if self.running_sums.len() < num_groups {
+            self.running_sums.resize(num_groups, T::Widened::default());
+        }
+
+        let field = self.output_field();
+        let colname = field.name();
+        let col_ref = batch.column_by_name(colname).ok_or_else(|| ExecutionError::InvalidData(colname.to_string()))?; 
+
+        let arr = col_ref
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T::WidenedArrow>>()
+            .expect("MergeSumExec: Column type does not match T - Planner bug");
+
+        for (i, &gi) in group_indices.iter().enumerate() {
+            let value = arr.value(i);
+            self.running_sums[gi as usize] += value.into();
+        }
+
+        Ok(())
+    }
+
     fn output_field(&self) -> Field {
         Field::new(
             format!("sum({})", self.column_name),
@@ -204,7 +240,7 @@ where
         )
     }
 
-    fn finalize(&mut self) -> ArrayRef {
+    fn materialize(&mut self) -> ArrayRef {
         T::into_array(std::mem::take(&mut self.running_sums))
     }
 

@@ -44,6 +44,10 @@ pub enum LogicalExpr {
         func: AggFunc,
         arg: Box<LogicalExpr>,
     },
+    Cast {
+        expr: Box<LogicalExpr>, 
+        target_datatype: DataType,
+    }
 }
 
 // Each variant is a node in the plan tree. Data flows bottom-up.
@@ -167,6 +171,7 @@ impl fmt::Display for LogicalExpr {
                 write!(f, "({} {} {})", left, op, right)
             }
             LogicalExpr::Aggregate { func, arg } => write!(f, "{}({})", func, arg),
+            LogicalExpr::Cast { expr, target_datatype} => write!(f, "CAST({} AS {:?})", expr, target_datatype),
         }
     }
 }

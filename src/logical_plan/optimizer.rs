@@ -2,31 +2,33 @@
 //! Each optimization implements OptimizerRule and receives the whole plan tree.
 //! Rules are applied in order — the output of one becomes the input of the next.
 
-use crate::logical_plan::logical_operators::{BinaryOp, LiteralValue, LogicalExpr, LogicalPlan};
+use crate::{catalog::schema::TableSchema, logical_plan::logical_operators::{BinaryOp, LiteralValue, LogicalExpr, LogicalPlan}};
 
 pub trait OptimizerRule {
     fn name(&self) -> &str;
     fn apply(&self, plan: LogicalPlan) -> LogicalPlan;
 }
 
-pub struct Optimizer {
-    rules: Vec<Box<dyn OptimizerRule>>,
-}
+pub struct Optimizer<'a> {
+      rules: Vec<Box<dyn OptimizerRule + 'a>>,
+  }
 
-impl Optimizer {
-    pub fn new() -> Self {
-        Self {
-            rules: vec![
-                Box::new(ConstantFolding),
-                Box::new(EliminateTrueFilter),
-            ],
-        }
-    }
+  impl<'a> Optimizer<'a> {
+      pub fn new(schema: &'a TableSchema) -> Self {
+          Self {
+              rules: vec![
+                  Box::new(TypeCoercion { schema }),
+                  Box::new(ConstantFolding),
+                  Box::new(EliminateTrueFilter),
+              ],
+          }
+      }
 
-    pub fn optimize(&self, plan: LogicalPlan) -> LogicalPlan {
-        self.rules.iter().fold(plan, |p, rule| rule.apply(p))
-    }
-}
+      pub fn optimize(&self, plan: LogicalPlan) -> LogicalPlan {
+          self.rules.iter().fold(plan, |p, rule| rule.apply(p))
+      }
+  }
+
 
 // Applies a function bottom-up to every node in the tree.
 // Children are rewritten before the parent — so when a rule sees a node,
@@ -59,38 +61,6 @@ where
 
 
 struct ConstantFolding;
-
-impl OptimizerRule for ConstantFolding {
-    fn name(&self) -> &str { "constant_folding" }
-
-    fn apply(&self, plan: LogicalPlan) -> LogicalPlan {
-        rewrite(plan, &|node| match node {
-            LogicalPlan::Filter { predicate, input } => LogicalPlan::Filter {
-                predicate: fold_expr(predicate),
-                input,
-            },
-            LogicalPlan::Project { projections, input } => LogicalPlan::Project {
-                projections: projections.into_iter().map(fold_expr).collect(),
-                input,
-            },
-            other => other,
-        })
-    }
-}
-
-struct EliminateTrueFilter;
-
-impl OptimizerRule for EliminateTrueFilter {
-    fn name(&self) -> &str { "eliminate_true_filter" }
-
-    fn apply(&self, plan: LogicalPlan) -> LogicalPlan {
-        // Runs after ConstantFolding — catches filters that folded to true
-        rewrite(plan, &|node| match node {
-            LogicalPlan::Filter { predicate: LogicalExpr::Literal(LiteralValue::Bool(true)), input } => *input,
-            other => other,
-        })
-    }
-}
 
 // Evaluates BinaryOp expressions where both sides are literals.
 fn fold_expr(expr: LogicalExpr) -> LogicalExpr {
@@ -125,6 +95,154 @@ fn fold_expr(expr: LogicalExpr) -> LogicalExpr {
 }
 
 
+impl OptimizerRule for ConstantFolding {
+    fn name(&self) -> &str { "constant_folding" }
+
+    fn apply(&self, plan: LogicalPlan) -> LogicalPlan {
+        rewrite(plan, &|node| match node {
+            LogicalPlan::Filter { predicate, input } => LogicalPlan::Filter {
+                predicate: fold_expr(predicate),
+                input,
+            },
+            LogicalPlan::Project { projections, input } => LogicalPlan::Project {
+                projections: projections.into_iter().map(fold_expr).collect(),
+                input,
+            },
+            other => other,
+        })
+    }
+}
+
+struct EliminateTrueFilter;
+
+impl OptimizerRule for EliminateTrueFilter {
+    fn name(&self) -> &str { "eliminate_true_filter" }
+
+    fn apply(&self, plan: LogicalPlan) -> LogicalPlan {
+        // Runs after ConstantFolding — catches filters that folded to true
+        rewrite(plan, &|node| match node {
+            LogicalPlan::Filter { predicate: LogicalExpr::Literal(LiteralValue::Bool(true)), input } => *input,
+            other => other,
+        })
+    }
+}
+
+struct TypeCoercion<'a> {
+    schema: &'a TableSchema,
+}
+
+/// Insert the Cast operator where it is actually required
+fn coerce_comparison(
+    left: LogicalExpr,
+    op: BinaryOp,
+    right: LogicalExpr,
+    schema: &TableSchema,
+) -> LogicalExpr {
+    match (left, right) {
+        (LogicalExpr::Column(table, col), LogicalExpr::Literal(lit)) => {
+            let target_type = schema
+                .columns
+                .iter()
+                .find(|c| c.name == col)
+                .expect("analyzer should have validated column existence")
+                .data_type
+                .clone();
+
+            LogicalExpr::BinaryOp {
+                left: Box::new(LogicalExpr::Column(table, col)),
+                op,
+                right: Box::new(LogicalExpr::Cast {
+                    expr: Box::new(LogicalExpr::Literal(lit)),
+                    target_datatype: target_type,
+                }),
+            }
+        }
+
+        (LogicalExpr::Literal(lit), LogicalExpr::Column(table, col)) => {
+            let target_type = schema
+                .columns
+                .iter()
+                .find(|c| c.name == col)
+                .expect("analyzer should have validated column existence")
+                .data_type
+                .clone();
+
+            LogicalExpr::BinaryOp {
+                left: Box::new(LogicalExpr::Cast {
+                    expr: Box::new(LogicalExpr::Literal(lit)),
+                    target_datatype: target_type,
+                }),
+                op,
+                right: Box::new(LogicalExpr::Column(table, col)),
+            }
+        }
+
+        (left, right) => LogicalExpr::BinaryOp {
+            left: Box::new(left),
+            op,
+            right: Box::new(right),
+        },
+    }
+}
+
+
+fn is_comparison_op(op: &BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Eq
+            | BinaryOp::NotEq
+            | BinaryOp::Lt
+            | BinaryOp::LtEq
+            | BinaryOp::Gt
+            | BinaryOp::GtEq
+    )
+}
+
+/// Recursively traverse the ExpressionTree to identify BinaryOps. 
+/// Only on ops like Gt, Lt, Eq, Nq, GtEq, LtEq, can we apply coercion
+fn coerce_expr(expr: LogicalExpr, schema: &TableSchema) -> LogicalExpr {
+    match expr {
+        LogicalExpr::BinaryOp { left, op, right } => {
+            let left = coerce_expr(*left, schema);
+            let right = coerce_expr(*right, schema);
+
+            if is_comparison_op(&op) {
+                coerce_comparison(left, op, right, schema)
+            } else {
+                LogicalExpr::BinaryOp {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                }
+            }
+        }
+
+        LogicalExpr::Cast { expr, target_datatype } => LogicalExpr::Cast {
+            expr: Box::new(coerce_expr(*expr, schema)),
+            target_datatype,
+        },
+
+        other => other,
+    }
+}
+
+
+impl<'a> OptimizerRule for TypeCoercion<'a> {
+    fn name(&self) -> &str { "type_coercion" }
+    fn apply(&self, plan: LogicalPlan) -> LogicalPlan {
+        // Traverse the LogicalPlan tree. Apply TypeCoercion only when we see a Filter
+        rewrite(plan, &|node| match node {
+              LogicalPlan::Filter { predicate, input } => LogicalPlan::Filter {
+                  
+                  // Recurse into the predicate expression, since predicate is also supposed to a tree
+                  predicate: coerce_expr(predicate, self.schema),
+                  input,
+              },
+              other => other,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,7 +264,8 @@ mod tests {
     fn optimize_sql(sql: &str) -> LogicalPlan {
         let stmt = parse(sql).unwrap();
         let plan = lower(&stmt, &make_schema()).unwrap();
-        Optimizer::new().optimize(plan)
+        let schema = make_schema();
+        Optimizer::new(&schema).optimize(plan)
     }
 
     // 1 = 1 folds to true, AND with age > 30 simplifies to just age > 30

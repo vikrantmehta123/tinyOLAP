@@ -1,10 +1,13 @@
-use arrow::array::{ArrayRef, RecordBatch};
+use arrow::array::{
+    ArrayRef, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    RecordBatch, UInt8Array, UInt16Array, UInt32Array, UInt64Array
+};
 
 use crate::{
     execution::executor::ExecutionError,
     physical_plan::physical_operators::{CmpOp, LiteralValue, LogicalOp, PhysicalExpr},
 };
-use arrow::array::{BooleanArray, Datum, Float64Array, Int64Array, Scalar, StringArray};
+use arrow::array::{BooleanArray, Datum, Scalar, StringArray};
 
 pub enum ColumnarValue {
     Array(ArrayRef),
@@ -16,11 +19,19 @@ impl ColumnarValue {
         match self {
             ColumnarValue::Array(arr) => Box::new(arr.clone()),
             ColumnarValue::Scalar(lit) => match lit {
-                LiteralValue::Int(v) => Box::new(Scalar::new(Int64Array::from(vec![*v]))),
-                LiteralValue::Float(v) => Box::new(Scalar::new(Float64Array::from(vec![*v]))),
+                LiteralValue::I8(v)   => Box::new(Scalar::new(Int8Array::from(vec![*v]))),
+                LiteralValue::I16(v)  => Box::new(Scalar::new(Int16Array::from(vec![*v]))),
+                LiteralValue::I32(v)  => Box::new(Scalar::new(Int32Array::from(vec![*v]))),
+                LiteralValue::I64(v)  => Box::new(Scalar::new(Int64Array::from(vec![*v]))),
+                LiteralValue::U8(v)   => Box::new(Scalar::new(UInt8Array::from(vec![*v]))),
+                LiteralValue::U16(v)  => Box::new(Scalar::new(UInt16Array::from(vec![*v]))),
+                LiteralValue::U32(v)  => Box::new(Scalar::new(UInt32Array::from(vec![*v]))),
+                LiteralValue::U64(v)  => Box::new(Scalar::new(UInt64Array::from(vec![*v]))),
+                LiteralValue::F32(v)  => Box::new(Scalar::new(Float32Array::from(vec![*v]))),
+                LiteralValue::F64(v)  => Box::new(Scalar::new(Float64Array::from(vec![*v]))),
                 LiteralValue::Bool(v) => Box::new(Scalar::new(BooleanArray::from(vec![*v]))),
-                LiteralValue::Str(v) => Box::new(Scalar::new(StringArray::from(vec![v.clone()]))),
-                LiteralValue::Null => panic!("NULL literal not supported"),
+                LiteralValue::Str(v)  => Box::new(Scalar::new(StringArray::from(vec![v.clone()]))),
+                LiteralValue::Null    => panic!("NULL literal not supported"),
             },
         }
     }
