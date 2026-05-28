@@ -1,8 +1,6 @@
-/target
-*.mrk
-*.bin
-/data
+tinyolap/target
+tinyolap/data
+tinyolap/benches/data
 /prompts
-/tests
+tinyolap/tests
 *.pdf
-/benches/data
