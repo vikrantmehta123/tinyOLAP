@@ -101,7 +101,51 @@ where
     }
 
     fn merge(&mut self, batch: &arrow::array::RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
-        todo!("merge not implemented for SumAccumulator yet")
+        if self.has_value.len() < num_groups {
+            self.has_value.resize(num_groups, false);
+            self.running_maximums
+                .resize(num_groups, T::Native::default());
+        }
+
+        let field = self.output_field();
+        let colname = field.name();
+        let col_ref = batch.column_by_name(colname).ok_or_else(|| ExecutionError::InvalidData(colname.to_string()))?; 
+
+        let arr = col_ref
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .expect("MergeMaxExec: The downcast array type doesn't match.");
+        
+        // No GROUP BY => we can use SIMD
+        if num_groups == 1 {
+            if let Some(partial) = aggregate::max(arr) {
+                if self.has_value[0] {
+                    if partial > self.running_maximums[0] {
+                        self.running_maximums[0] = partial;
+                    }
+                } else {
+                    self.running_maximums[0] = partial;
+                    self.has_value[0] = true;
+                }
+            }
+            return Ok(());
+        }
+
+        for (i, &gi) in group_indices.iter().enumerate() {
+            let value = arr.value(i);
+
+            if !self.has_value[gi as usize] {
+                self.running_maximums[gi as usize] = value;
+                self.has_value[gi as usize] = true;
+                continue;
+            }
+
+            if value > self.running_maximums[gi as usize] {
+                self.running_maximums[gi as usize] = value;
+            }
+        }
+
+        Ok(())
     }
 
     fn output_field(&self) -> Field {

@@ -83,42 +83,52 @@ impl ExecutionPlan for MergeAggregateExec {
                 Some(Err(e)) => return Some(Err(e)),
             };
 
-            let group_by_arrays: Vec<ArrayRef> = self
-                .group_by_fields
-                .iter()
-                .map(|f| {
-                    batch
-                        .column_by_name(f.name())
-                        .expect("group-by column missing from batch — planner bug")
-                        .clone()
-                })
-                .collect();
+            let mut group_indices: Vec<u32>;
+            let num_groups;
 
-            let rows = match self.row_converter.convert_columns(&group_by_arrays) {
-                Ok(r) => r,
-                Err(e) => return Some(Err(e.into())),
-            };
+            if self.group_by_fields.is_empty() {
+                group_indices = vec![0u32; batch.num_rows()];
+                num_groups = 1;
+            }
+            else{
+                let group_by_arrays: Vec<ArrayRef> = self
+                    .group_by_fields
+                    .iter()
+                    .map(|f| {
+                        batch
+                            .column_by_name(f.name())
+                            .expect("group-by column missing from batch — planner bug")
+                            .clone()
+                    })
+                    .collect();
 
-            // The i'th row in the batch belongs to the group -> group_indices[i]
-            let mut group_indices = Vec::with_capacity(batch.num_rows());
-
-            for row in rows.iter() {
-                let key = row.owned();
-                let idx = match self.group_to_index.get(&key) {
-                    Some(&existing) => existing,
-                    None => {
-                        let new_idx = self.group_values.len() as u32;
-
-                        self.group_values.push(key.clone());
-                        self.group_to_index.insert(key, new_idx);
-                        new_idx
-                    }
+                let rows = match self.row_converter.convert_columns(&group_by_arrays) {
+                    Ok(r) => r,
+                    Err(e) => return Some(Err(e.into())),
                 };
 
-                group_indices.push(idx);
-            }
+                // The i'th row in the batch belongs to the group -> group_indices[i]
+                group_indices = Vec::with_capacity(batch.num_rows());
 
-            let num_groups = self.group_values.len();
+                for row in rows.iter() {
+                    let key = row.owned();
+                    let idx = match self.group_to_index.get(&key) {
+                        Some(&existing) => existing,
+                        None => {
+                            let new_idx = self.group_values.len() as u32;
+
+                            self.group_values.push(key.clone());
+                            self.group_to_index.insert(key, new_idx);
+                            new_idx
+                        }
+                    };
+
+                    group_indices.push(idx);
+                }
+
+                num_groups = self.group_values.len();
+
+            }
 
             for acc in self.accumulators.iter_mut() {
                 if let Err(e) = acc.merge(&batch, &group_indices, num_groups) {
