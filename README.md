@@ -1,50 +1,82 @@
 # tinyOLAP
 
-A columnar database built from scratch in Rust, inspired by ClickHouse. This is a learning project — not a production system. 
+A small columnar database, written in Rust.
 
-## Features
+It is a work-in-progress and it is not trying to be a production ready project.
 
-### Storage
-- **Columnar layout** — data stored column-by-column; reads touch only the columns a query needs
-- **LZ4 compression** — every column file is compressed; decompressed on read
-- **Granule-based indexing** — data is divided into granules of 512 values; each granule has a mark (byte offset) so reads can seek directly to the right block without a full scan
-- **Immutable parts** — each `INSERT` produces an atomic, crash-safe part directory written to `tmp_part_NNNNN/` and renamed on success
-- **Sorted parts** — rows are sorted by the primary key column(s) before being written
-- **Encoding codecs** — Plain, Delta, and RLE encoders available per column
+## What Works Today
+
+- Data can be INSERTed into a table. Data lives on disk as immutable parts, lz4-compressed, with per-column files and a mark index for granule lookup.
+- SELECT statements with filters and projections. GROUP BY statements with aggregations (COUNT, SUM, MIN, MAX, AVG). 
+- Parallelized Query Processing: a query pipeline is cloned and executed in parallel, and a gather operation collects results from parallel threads.
+
+## What Doesn't Work
+
+- No DELETE, UPDATE statements
+- No compaction of parts.
+- No indexes, or zone-maps.
+- The SQL surface is narrow. The parser is `sqlparser-rs`; the analyzer that lowers it is hand-rolled and will reject most things outside the path above.
+- No network layer, no client protocol. Only CLI interface is present.
+
+## What's Next
+
+1. Zone Maps Per Granule
+2. SIMD Friendly Hash-Map Lookup
+3. Compaction of parts in a background task.
+
+## Benchmarks
+
+A criterion-driven suite of 8 SELECT queries over a fixed 25M-row, 13-column synthetic `events` table (~1 GB on disk, lz4-compressed, 5 parts). Dataset and seed are fixed (`SmallRng::seed_from_u64(42)`).
+
+Results below are from a 4-thread run measured against a serial baseline, on a typical laptop.
+
+| Query | What it tests                          | Serial   | 4 threads | Speedup |
+|-------|----------------------------------------|----------|-----------|---------|
+| Q1    | Scan + SUM, single column              | ~250 ms  | 185 ms    | 1.35×   |
+| Q2    | Scan + 5 aggregates                    | ~870 ms  | 563 ms    | 1.54×   |
+| Q3    | Low-selectivity filter (~0.5% pass)    | ~440 ms  | 430 ms    | ~1.0×   |
+| Q4    | High-selectivity filter (~50% pass)    | ~495 ms  | 280 ms    | 1.77×   |
+| Q5    | GROUP BY low-card int (~200 groups)    | ~1.95 s  | 1.18 s    | 1.66×   |
+| Q6    | GROUP BY high-card int (~1M groups)    | ~12.1 s  | 7.10 s    | 1.71×   |
+| Q7    | Filter + 2-key GROUP BY                | ~12.9 s  | 12.05 s   | 1.07×   |
+| Q8    | GROUP BY string (~20 groups)           | ~5.75 s  | 4.20 s    | 1.37×   |
+
+A few notes:
+
+- **Speedups cap well below 4×.** Operator-chain overhead, per-batch dispatch, and gather contention all bite. Q7's 1.07× is the clearest sign — the filter + multi-key GROUP BY chain spends a lot of time outside the parallelizable scan.
+- **Q3 barely moves** because today every query scans every granule. Zone maps (next on the roadmap) should turn Q3 into a near-no-op rather than a parallelism problem.
+- **Running parallel code paths on 1 thread is ~50% slower than the original serial baseline.** The parallel dispatch overhead is real and only pays off above 1 thread.
+
+See [`tinyolap/benches/README.md`](tinyolap/benches/README.md) for the full methodology — dataset rationale, query selection, criterion config, and why throughput numbers will need re-interpretation once granule-skipping lands.
+
+## Design Decisions
+
+- Marks are at granule level and not row level. Row level indexes will grow metadata. Granule-level index keeps the index small enough to hold in memory and can be efficiently used in indexes.
+- Arrow format for in-memory buffers. On-disk columnar shape matches arrow format and this provides SIMD computation on arrays.
+
+## On-Disk Layout of Data
+
+One INSERT produces one part. Parts are immutable. A write goes to `tmp_part_NNNNN/` and is atomically renamed into place on success, so a crash mid-insert never leaves a half-written part visible to readers.
+
+Inside a column file, data is grouped into **granules** of 512 values. A granule is the atomic addressable unit — one mark per granule, and predicate pushdown skips at granule granularity. Multiple granules pack into a **block** of roughly 8 KiB uncompressed bytes per lz4 call.
+
+This design is inspired by ClickHouse.
+
+```bash
+table_root/
+├── part_00001/
+│   ├── user_id.bin     ← compressed column data
+│   ├── user_id.mrk     ← granule index: offsets + row counts
+│   ├── country.bin
+│   └── country.mrk
+├── part_00002/
+│   └── ...
+```
 
 ### Supported Types
 `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `bool`, variable-length strings
 
-### Query Processing
-- **Full table scan** — `SELECT col1, col2 FROM table` and `SELECT * FROM table`; only requested columns are read
-- **WHERE clause** — predicates with `=`, `!=`, `<`, `<=`, `>`, `>=`, `AND`, `OR`, `NOT`
-- **Aggregations** — `SUM`, `AVG`, `COUNT`, `MIN`, `MAX`
-- **GROUP BY** — group aggregations by one or more columns
-- **Parallel scans** — Parts are read in parallel via `rayon`
-
-### SQL Dialect
-```sql
-INSERT INTO <table> VALUES (...), (...);
-SELECT col, agg(col) FROM <table> WHERE <predicate> GROUP BY col;
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- [Rust](https://rustup.rs/) (stable toolchain)
-
-### Clone and build
-
-```bash
-git clone https://github.com/vikrantmehta123/tinyOLAP.git
-cd tinyOLAP
-cargo build
-```
-
-### Create a schema
+## Try It
 
 tinyOLAP reads a `schema.json` from the table directory at startup. Create one before running:
 
@@ -64,15 +96,16 @@ cat > data/my_table/schema.json << 'EOF'
 EOF
 ```
 
-`sort_key` is a list of column indices (zero-based) that form the primary key. The default table directory is `data/tinyolap_smoke`. To use a different directory, edit `src/main.rs`.
+`sort_key` is a list of column indices (zero-based) that form the primary key. The default table directory is `data/tinyolap_smoke`. To use a different directory, edit `tinyolap/src/config.rs`.
 
-### Run
 
 ```bash
-cargo run
+git clone https://github.com/vikrantmehta123/tinyOLAP
+cd tinyOLAP/tinyolap
+cargo run --release
 ```
 
-```
+```sql
 tinyOLAP ready. Table: 'my_table'
 Type SQL and press Enter. Ctrl-D to quit.
 
@@ -86,32 +119,9 @@ OK (2 rows inserted, part_0)
 ...
 ```
 
-### Run tests
-
-```bash
-cargo test
-```
-
----
-
-## Project Layout
+## Repo Layout
 
 ```
-src/
-  storage/      # column writers, readers, marks, parts, schema
-  encoding/     # Plain, Delta, RLE codecs
-  parser/       # SQL → internal AST (via sqlparser-rs)
-  processors/   # query pipeline stages: scan, filter, project, aggregate, group-by
-  aggregator/   # SUM, COUNT, AVG, MIN, MAX implementations
-  analyser.rs   # semantic analysis / query planning
-  executor.rs   # ties the pipeline together
-  main.rs       # REPL entry point
-tasks/          # per-task markdown files tracking active work
-SPEC.md         # phase 1 / phase 2 feature roadmap
+tinyolap/   the database
+examples/   unrelated scratchpad — SIMD experiments, assembly inspection, etc.
 ```
-
----
-
-## Inspiration
-
-Architecture decisions — granule size, mark files, immutable parts, LZ4 — are drawn from studying the [ClickHouse](https://github.com/ClickHouse/ClickHouse) source.
