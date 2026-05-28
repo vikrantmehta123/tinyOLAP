@@ -4,3 +4,4 @@ tinyolap/benches/data
 /prompts
 tinyolap/tests
 *.pdf
+target/
