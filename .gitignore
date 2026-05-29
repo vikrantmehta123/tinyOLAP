@@ -1,7 +1,8 @@
 tinyolap/target
 tinyolap/data
-tinyolap/benches/data
+tinyolap/benches/data/
 /prompts
 tinyolap/tests
 *.pdf
 target/
+.vscode/

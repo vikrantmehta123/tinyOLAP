@@ -1,5 +1,8 @@
 use std::fmt;
-use std::{collections::HashMap, sync::Arc};
+use std::hash::BuildHasher;
+use std::sync::Arc;
+use hashbrown::hash_map::RawEntryMut;
+use hashbrown::HashMap;
 
 use arrow::datatypes::Field;
 use arrow::row::{OwnedRow, RowConverter, SortField};
@@ -20,7 +23,10 @@ pub struct HashAggregateExec {
 
     row_converter: RowConverter, // We'll use Arrow's RowConverter to convert GROUP BY exprs into OwnedRow
     group_to_index: HashMap<OwnedRow, u32>, // Maps a group to its index in group_indices
-    group_values: Vec<OwnedRow>, // group_values[i] == group_index to actual group mapping.
+
+    // Scratch buffer to keep the hashes; This could go in next_batch function, but having it here avoids
+    // reallocation everytime we call next_batch
+    hashes: Vec<u64>,
 }
 
 impl HashAggregateExec {
@@ -52,8 +58,8 @@ impl HashAggregateExec {
             group_by_fields,
 
             row_converter,
-            group_to_index: HashMap::new(),
-            group_values: Vec::new(),
+            group_to_index: HashMap::new(), // hashbrown::HashMap has a ahash hasher by default
+            hashes: Vec::new(),
         }
     }
 }
@@ -101,26 +107,41 @@ impl ExecutionPlan for HashAggregateExec {
                     Ok(r) => r,
                     Err(e) => return Some(Err(e.into())),
                 };
+                
+                // Pass 1: Pre-hash everything in a tight loop
+                // Clear the hashes vector and compute hashes
+                // Due to the tight for loop, compiler can vectorize this
+                self.hashes.clear();
+                self.hashes.reserve(batch.num_rows());
 
-                group_indices = Vec::with_capacity(batch.num_rows());
+                let hasher = self.group_to_index.hasher();
 
                 for row in rows.iter() {
-                    let key = row.owned();
-                    let idx = match self.group_to_index.get(&key) {
-                        Some(&existing) => existing,
-                        None => {
-                            let new_idx = self.group_values.len() as u32;
-
-                            self.group_values.push(key.clone());
-                            self.group_to_index.insert(key, new_idx);
-                            new_idx
-                        }
-                    };
-
-                    group_indices.push(idx);
+                    self.hashes.push(hasher.hash_one(row.as_ref()));
                 }
 
-                num_groups = self.group_values.len();
+                // Pass 2: Probe with pre-computed hashes
+                group_indices = Vec::with_capacity(batch.num_rows());
+
+                for (i, row) in rows.iter().enumerate() {
+                    let hash = self.hashes[i];
+                    let bytes = row.as_ref();
+
+                    let next_idx = self.group_to_index.len() as u32;
+
+                    let idx = match self.group_to_index
+                        .raw_entry_mut()
+                        .from_hash(hash, |existing_key: &OwnedRow| {existing_key.as_ref() == bytes})
+                    {
+                        RawEntryMut::Occupied(e) => *e.get(),
+                        RawEntryMut::Vacant(e) => {
+                            e.insert_hashed_nocheck(hash, row.owned(), next_idx);
+                            next_idx
+                        }
+                    };
+                    group_indices.push(idx);
+                }
+                num_groups = self.group_to_index.len();
             };
 
             for acc in self.accumulators.iter_mut() {
@@ -134,11 +155,15 @@ impl ExecutionPlan for HashAggregateExec {
         let group_arrays: Vec<ArrayRef> = if self.group_by_fields.is_empty() {
             vec![]
         } else {
-            let owned_rows = std::mem::take(&mut self.group_values);
-            match self
-                .row_converter
-                .convert_rows(owned_rows.iter().map(|or| or.row()))
-            {
+            let n = self.group_to_index.len();
+            let mut ordered: Vec<Option<&OwnedRow>> = vec![None; n];
+            for (k, &v) in self.group_to_index.iter() {
+                ordered[v as usize] = Some(k);
+            }
+            let rows_iter = ordered
+                .iter()
+                .map(|opt| opt.expect("group index gap — bug").row());
+            match self.row_converter.convert_rows(rows_iter) {
                 Ok(arrs) => arrs,
                 Err(e) => return Some(Err(e.into())),
             }
