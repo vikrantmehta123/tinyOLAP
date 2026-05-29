@@ -1,12 +1,12 @@
 //! Building a Threadpool Using Rust Primitives
-//! 
+//!
 //! Most multi-threaded systems will have a threadpool implementation to avoid
-//! the cost of spawning threads on each call. At the start of the system, 
+//! the cost of spawning threads on each call. At the start of the system,
 //! you spawn the required threads and use them from this pool each time
 //! one is needed.
 
-use std::thread::{self, JoinHandle};
 use crossbeam_channel::{Sender, unbounded};
+use std::thread::{self, JoinHandle};
 
 type Task = Box<dyn FnOnce() + Send + 'static>;
 
@@ -22,12 +22,11 @@ struct ThreadPool {
 
 impl ThreadPool {
     fn new(num_threads: usize) -> Self {
-
         // This is how unbounded is defined in the crossbeam_channel crate
         // pub fn unbounded<T>() -> (Sender<T>, Receiver<T>).
-        // Crossbeam channels are FIFO ordered. So the order of the task that goes in, 
+        // Crossbeam channels are FIFO ordered. So the order of the task that goes in,
         // is the order of the tasks in which they are executed.
-        // Of course, different tasks may take different amount of time, 
+        // Of course, different tasks may take different amount of time,
         // but their execution is FIFO
 
         // For us, we are going to put closures in the channel
@@ -36,14 +35,12 @@ impl ThreadPool {
         // finding the idle thread and that receiver will pick up the task
         // Since we are going to pass a task to be executed once, we set `FnOnce`
         let (sender, receiver) = unbounded::<Box<dyn FnOnce() + Send + 'static>>();
-        
+
         // Create a pool of threads that are receiving the tasks
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         for _ in 0..num_threads {
-
             let r = receiver.clone();
-            let h = thread::spawn( move || {
-
+            let h = thread::spawn(move || {
                 // Receiver's `recv` method is not busy-polling. recv() blocks
                 // by asking the OS to put it to sleep. When we call send(),
                 // crossbeam tells the OS to notify this sleeping thread
@@ -56,17 +53,17 @@ impl ThreadPool {
                         Ok(task) => task(),
 
                         // ThreadId is guaranteed to be unique, but it's not incrementing by one or anything
-                        Err(_) => {println!("Channel closed for {:?}", thread::current().id()); break; },
+                        Err(_) => {
+                            println!("Channel closed for {:?}", thread::current().id());
+                            break;
+                        }
                     }
                 }
             });
             handles.push(h);
         }
 
-        Self {
-            handles, 
-            sender
-        }
+        Self { handles, sender }
     }
 
     fn submit(&self, task: Task) {
@@ -81,14 +78,12 @@ impl ThreadPool {
     }
 }
 
-
 fn main() {
-
     let pool = ThreadPool::new(4);
 
     for i in 1..100 {
         pool.submit(Box::new(move || f(i)));
-    }    
+    }
 
     pool.join();
 }
