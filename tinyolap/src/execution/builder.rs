@@ -26,6 +26,7 @@ use crate::execution::full_scan::{FullScanExec, PartWorkSource};
 use crate::execution::gather::GatherExec;
 use crate::execution::limit::LimitExec;
 use crate::execution::project::ProjectExec;
+use crate::execution::zone_map_scan::ZoneMapScanExec;
 use crate::physical_plan::physical_operators::{AggFunc, AggSpec, PhysicalExpr, PhysicalPlan};
 
 /// PhysicalPlan is pattern-matchable data;
@@ -251,6 +252,11 @@ fn build_inner(
             Ok(full_scan_operator)
         }
 
+        PhysicalPlan::ZoneMapScan { columns, predicate , ..} => {
+            let zone_map_scan_operator = construct_zone_map_scan_operator(worksource, columns, schema, predicate)?;
+            Ok(zone_map_scan_operator)
+        }
+
         // Wrapping operators: build the child first, then wrap. Same shape
         // for all three — only the wrapper type differs.
         PhysicalPlan::Filter { predicate, input } => {
@@ -283,9 +289,6 @@ fn build_inner(
                 child,
                 group_by_fields,
             )))
-        }
-        PhysicalPlan::ZoneMapScan { .. } => {
-            unimplemented!("ZoneMapScanExec lands in TASK-004")
         }
     }
 }
@@ -323,4 +326,33 @@ fn construct_full_scan_operator(
         columns,
         arrow_schema,
     )))
+}
+
+
+/// Helper function that constructs the full scan operator for the builder
+fn construct_zone_map_scan_operator(
+    worksource: &Arc<PartWorkSource>,
+    columns: Vec<String>,
+    schema: &TableSchema,
+    predicate: PhysicalExpr,
+) -> Result<Box<dyn ExecutionPlan>, ExecutionError> {
+    let columns: Vec<ColumnSchema> = columns
+        .iter()
+        .map(|name| {
+            schema
+                .columns
+                .iter()
+                .find(|c| c.name == *name)
+                .cloned()
+                .ok_or_else(|| ExecutionError::InvalidData(format!("unknown column: {}", name)))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let fields: Vec<Field> = columns
+        .iter()
+        .map(|c| Field::new(&c.name, c.data_type.to_arrow(), false))
+        .collect();
+    let arrow_schema = Arc::new(Schema::new(fields));
+
+    Ok(Box::new(ZoneMapScanExec::new(worksource.clone(), columns, arrow_schema, predicate)))
 }
