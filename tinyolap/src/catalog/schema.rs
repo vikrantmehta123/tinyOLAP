@@ -1,6 +1,7 @@
 //! Type definitions for tinyOLAP's type system
 //! This is the single source of truth for the type system.
 //! All other layers will import from here.
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};

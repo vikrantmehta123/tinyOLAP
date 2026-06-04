@@ -1,3 +1,11 @@
+//! Builds an Arrow RecordBatch from INSERT statement
+//! 
+//! Given an INSERT INTO statement, we want to convert that into
+//! an Arrow RecordBatch that we can actually write onto disk.
+//! We assume a single table as of now given by TableSchema. 
+//! At a later point, we may want to support INSERTs into multiple
+//! tables.
+
 use std::str::FromStr;
 use std::sync::Arc;
 

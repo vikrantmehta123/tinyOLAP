@@ -1,10 +1,36 @@
-//! Schema validation — checks that all names and types in a query are valid
-//! against the known table schema. Runs after the shape validator; does not check
+//! Semantic validation
+//!
+//! Checks that all names and types in a query are valid against the
+//! known table schema. Runs after the validator; does not check
 //! SQL structure, only that referenced tables and columns actually exist.
+//! For the moment, we have assumed that there will only be a single table.
+//!
+//! For the most part, we use the sqlparser crate's Visitor API.
 
 use crate::catalog::schema::{DataType, TableSchema};
 use core::ops::ControlFlow;
 use sqlparser::ast::{Expr, Statement, TableFactor, Value, ValueWithSpan, Visit, Visitor};
+
+/// Public facing function that will be called to analyse
+/// Note that we don't analyze INSERT statements. We assume
+/// they are correct
+pub fn analyze(stmt: &Statement, schema: &TableSchema) -> Result<(), String> {
+    match stmt {
+        Statement::Insert(_) => Ok(()),
+        Statement::Query(_) => {
+            let mut visitor = AnalyzerVisitor {
+                schema,
+                error: None,
+            };
+            let _ = stmt.visit(&mut visitor);
+            match visitor.error {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
+        }
+        _ => Err("unsupported statement type".to_string()),
+    }
+}
 
 struct AnalyzerVisitor<'a> {
     schema: &'a TableSchema,
@@ -12,7 +38,10 @@ struct AnalyzerVisitor<'a> {
 }
 
 impl<'a> AnalyzerVisitor<'a> {
-    fn resolve_column_expr(&self, expr:&Expr) -> Result<Option<&crate::catalog::schema::ColumnSchema>, String> {
+    fn resolve_column_expr(
+        &self,
+        expr: &Expr,
+    ) -> Result<Option<&crate::catalog::schema::ColumnSchema>, String> {
         match expr {
             Expr::Identifier(ident) => Ok(Some(self.resolve_column(&ident.value)?)),
             Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
@@ -20,7 +49,10 @@ impl<'a> AnalyzerVisitor<'a> {
                 let col_name = &parts[1].value;
 
                 if table_name != &self.schema.name {
-                    return Err(format!("unknown table in qualified reference: {}", table_name));
+                    return Err(format!(
+                        "unknown table in qualified reference: {}",
+                        table_name
+                    ));
                 }
 
                 Ok(Some(self.resolve_column(col_name)?))
@@ -68,11 +100,11 @@ impl<'a> AnalyzerVisitor<'a> {
             // Check range compatibility of the type. For instance, a value like 40_000 shouldn't be accepted for I8
             Value::Number(s, _) => {
                 let (min, max): (i128, i128) = match data_type {
-                    DataType::I8  => (i8::MIN  as i128, i8::MAX  as i128),
+                    DataType::I8 => (i8::MIN as i128, i8::MAX as i128),
                     DataType::I16 => (i16::MIN as i128, i16::MAX as i128),
                     DataType::I32 => (i32::MIN as i128, i32::MAX as i128),
                     DataType::I64 => (i64::MIN as i128, i64::MAX as i128),
-                    DataType::U8  => (0, u8::MAX  as i128),
+                    DataType::U8 => (0, u8::MAX as i128),
                     DataType::U16 => (0, u16::MAX as i128),
                     DataType::U32 => (0, u32::MAX as i128),
                     DataType::U64 => (0, u64::MAX as i128),
@@ -86,7 +118,10 @@ impl<'a> AnalyzerVisitor<'a> {
                 };
 
                 let n = s.parse::<i128>().map_err(|_| {
-                    format!("type mismatch: non-integer literal {} compared to integer column", s)
+                    format!(
+                        "type mismatch: non-integer literal {} compared to integer column",
+                        s
+                    )
                 })?;
                 if n < min || n > max {
                     return Err(format!(
@@ -105,6 +140,7 @@ impl<'a> AnalyzerVisitor<'a> {
 impl<'a> Visitor for AnalyzerVisitor<'a> {
     type Break = ();
 
+    /// We want to check whether the referenced tables in the SQL are valid
     fn pre_visit_table_factor(&mut self, table: &TableFactor) -> ControlFlow<()> {
         if let TableFactor::Table { name, .. } = table {
             let table_name = name.to_string();
@@ -183,25 +219,6 @@ impl<'a> Visitor for AnalyzerVisitor<'a> {
     }
 }
 
-pub fn analyze(stmt: &Statement, schema: &TableSchema) -> Result<(), String> {
-    match stmt {
-        Statement::Insert(_) => Ok(()),
-        Statement::Query(_) => {
-            let mut visitor = AnalyzerVisitor {
-                schema,
-                error: None,
-            };
-            let _ = stmt.visit(&mut visitor);
-            match visitor.error {
-                Some(e) => Err(e),
-                None => Ok(()),
-            }
-        }
-        _ => Err("unsupported statement type".to_string()),
-    }
-}
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,11 +229,20 @@ mod tests {
         TableSchema {
             name: "users".to_string(),
             columns: vec![
-                ColumnSchema { name: "id".to_string(),   data_type: DataType::I64 },
-                ColumnSchema { name: "name".to_string(), data_type: DataType::Str },
-                ColumnSchema { name: "age".to_string(),  data_type: DataType::I32 },
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: DataType::I64,
+                },
+                ColumnSchema {
+                    name: "name".to_string(),
+                    data_type: DataType::Str,
+                },
+                ColumnSchema {
+                    name: "age".to_string(),
+                    data_type: DataType::I32,
+                },
             ],
-            sort_key: vec![0]
+            sort_key: vec![0],
         }
     }
 
@@ -245,7 +271,7 @@ mod tests {
         assert!(analyze_sql("SELECT id FROM orders").is_err());
     }
 
-     #[test]
+    #[test]
     fn qualified_column_wrong_table_is_rejected() {
         assert!(analyze_sql("SELECT orders.id FROM users").is_err());
     }
@@ -258,8 +284,8 @@ mod tests {
     #[test]
     fn type_mismatch_string_to_numeric_is_rejected() {
         assert!(analyze_sql("SELECT id FROM users WHERE age = 'hello'").is_err());
-    }    
-    
+    }
+
     #[test]
     fn type_mismatch_numeric_to_string_is_rejected() {
         assert!(analyze_sql("SELECT id FROM users WHERE name = 42").is_err());
@@ -275,9 +301,10 @@ mod tests {
         // 40000 exceeds i16::MAX (32767)
         let schema = TableSchema {
             name: "users".to_string(),
-            columns: vec![
-                ColumnSchema { name: "country_id".to_string(), data_type: DataType::I16 },
-            ],
+            columns: vec![ColumnSchema {
+                name: "country_id".to_string(),
+                data_type: DataType::I16,
+            }],
             sort_key: vec![0],
         };
         let stmt = parse("SELECT country_id FROM users WHERE country_id = 40000").unwrap();
@@ -288,9 +315,10 @@ mod tests {
     fn i16_in_range_passes() {
         let schema = TableSchema {
             name: "users".to_string(),
-            columns: vec![
-                ColumnSchema { name: "country_id".to_string(), data_type: DataType::I16 },
-            ],
+            columns: vec![ColumnSchema {
+                name: "country_id".to_string(),
+                data_type: DataType::I16,
+            }],
             sort_key: vec![0],
         };
         let stmt = parse("SELECT country_id FROM users WHERE country_id = 100").unwrap();

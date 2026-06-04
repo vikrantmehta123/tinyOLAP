@@ -1,7 +1,9 @@
 //! Interactive REPL shell for tinyOLAP.
 //!
-//! Wraps rustyline so we get readline-style editing (arrow keys, history). 
-
+//! Wraps rustyline so we get readline-style editing (arrow keys, history).
+//! Used in main.rs as the entrypoint of the program for now.
+//! TODO: We would want to have this as a separate command line utility that can
+//! connect to the database rather than an entry point.
 
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
