@@ -1,6 +1,11 @@
-use std::{
-    fmt, path::{Path, PathBuf}, sync::{Arc, atomic::{AtomicUsize, Ordering::Relaxed}}
-};
+//! FullScanExec
+//! 
+//! Reads all the parts. Only the required columns are read from the parts.
+//! One RecordBatch == One part as of now.
+//! 
+//! TODO: Move towards one RecordBatch == One Granule
+
+use std::{fmt, path::Path, sync::Arc};
 
 use arrow::{
     array::{ArrayRef, RecordBatch},
@@ -9,56 +14,36 @@ use arrow::{
 
 use crate::{
     catalog::schema::{ColumnSchema, DataType},
-    execution::executor::{ExecutionError, ExecutionPlan}, storage::{column_reader::ColumnReader, string_column_reader::StringColumnReader},
+    execution::{
+        executor::{ExecutionError, ExecutionPlan},
+        work_source::ScanWorkSource,
+    },
+    storage::{column_reader::ColumnReader, string_column_reader::StringColumnReader},
 };
-
-/// This trait defines an abstraction for the FullScan operator
-/// Because of this trait, FullScan operator doesn't have to keep 
-/// track of what parts are read, especially in parallel scans
-pub trait ScanWorkSource: Send + Sync {
-    fn next_work(&self) -> Option<PathBuf>;
-}
-
-pub struct PartWorkSource{
-    parts: Vec<PathBuf>,
-    next: AtomicUsize, // The index in the parts vector upto which workers have read
-}
-
-/// For the moment, we have a PartWorkSource.
-/// We expect to implement a GranuleWorkSource later.
-/// This represents a Handle that the workers use when
-/// executig the FullScan operator
-impl PartWorkSource {
-    pub fn new(parts: Vec<PathBuf>) -> Self {
-        Self {
-            parts, 
-            next: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl ScanWorkSource for PartWorkSource { 
-    fn next_work(&self) -> Option<PathBuf> {
-        let val = self.next.fetch_add(1, Relaxed);
-        self.parts.get(val).cloned()
-    }
-}
 
 pub struct FullScanExec {
     work_source: Arc<dyn ScanWorkSource>,
-    columns: Vec<ColumnSchema>, // which columns to read, in output order
-    schema: Arc<Schema>, // Arrow schema cached once for reuse
+    columns: Vec<ColumnSchema>, // which columns to read from the part, in output order
+    schema: Arc<Schema>,        // Arrow schema cached once for reuse
 }
 
 impl FullScanExec {
-    pub fn new(work_source: Arc<dyn ScanWorkSource>, columns: Vec<ColumnSchema>, schema: Arc<Schema>) -> Self {
+    pub fn new(
+        work_source: Arc<dyn ScanWorkSource>,
+        columns: Vec<ColumnSchema>,
+        schema: Arc<Schema>,
+    ) -> Self {
         Self {
-            work_source, 
+            work_source,
             columns,
             schema,
         }
     }
 
+    /// For the moment, it is assumed that the work source will hand out an
+    /// identifier for a part. For us, it is a path. Then the Scan operator
+    /// knows how to read the part based on the identifier.
+    ///
     /// Given a path to a part, reads the data and casts it into a RecordBatch
     /// All subsequent query processing operators use RecordBatch as input
     fn read_part(&self, part_dir: &Path) -> Result<RecordBatch, ExecutionError> {
@@ -90,16 +75,13 @@ impl FullScanExec {
 }
 
 impl ExecutionPlan for FullScanExec {
-
     /// Gets the handle from the WorkSource and performs the read operation
     /// For the moment, parallelization is at a granularity of a Part.
-    /// TODO: Later, we want to move from part level granularity to a granule based one
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
         let part_dir = self.work_source.next_work();
         match part_dir {
             Some(dir) => Some(self.read_part(&dir)),
-            None => None
-
+            None => None,
         }
     }
     fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {

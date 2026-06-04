@@ -1,3 +1,9 @@
+//! ExecutionPlan trait that each operator must implementssss
+//! 
+//! Every Exec operator has to implement this trait.
+//! The trait deliberately is kept in a streaming manner so that
+//! the query execution model is a vectorized query execution model.
+
 use std::fmt;
 use arrow::array::RecordBatch;
 
@@ -10,6 +16,8 @@ pub enum ExecutionError {
 
 pub trait ExecutionPlan: fmt::Display + Send {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>>;
+
+    /// We want each operator to be pretty printed for us to inspect the plan
     fn fmt_indented(&self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result;
 }
 
