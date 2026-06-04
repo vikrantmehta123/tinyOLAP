@@ -7,3 +7,4 @@ pub mod project;
 pub mod builder;
 pub mod aggregation;
 pub mod gather;
+pub mod zone_map_scan;

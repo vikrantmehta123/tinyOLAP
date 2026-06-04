@@ -12,10 +12,7 @@ pub struct Optimizer {
 impl Optimizer {
     pub fn new() -> Self {
         Self {
-            rules: vec![
-                Box::new(EliminateTrueFilter),
-                Box::new(PredicatePushdown),
-            ],
+            rules: vec![Box::new(EliminateTrueFilter), Box::new(PredicatePushdown)],
         }
     }
 
@@ -31,19 +28,36 @@ where
     match plan {
         PhysicalPlan::Filter { predicate, input } => {
             let new_input = rewrite(*input, f);
-            f(PhysicalPlan::Filter { predicate, input: Box::new(new_input) })
+            f(PhysicalPlan::Filter {
+                predicate,
+                input: Box::new(new_input),
+            })
         }
         PhysicalPlan::Project { projections, input } => {
             let new_input = rewrite(*input, f);
-            f(PhysicalPlan::Project { projections, input: Box::new(new_input) })
+            f(PhysicalPlan::Project {
+                projections,
+                input: Box::new(new_input),
+            })
         }
-        PhysicalPlan::Aggregate { group_by, aggregates, input } => {
+        PhysicalPlan::Aggregate {
+            group_by,
+            aggregates,
+            input,
+        } => {
             let new_input = rewrite(*input, f);
-            f(PhysicalPlan::Aggregate { group_by, aggregates, input: Box::new(new_input) })
+            f(PhysicalPlan::Aggregate {
+                group_by,
+                aggregates,
+                input: Box::new(new_input),
+            })
         }
         PhysicalPlan::Limit { limit, input } => {
             let new_input = rewrite(*input, f);
-            f(PhysicalPlan::Limit { limit, input: Box::new(new_input) })
+            f(PhysicalPlan::Limit {
+                limit,
+                input: Box::new(new_input),
+            })
         }
         leaf => f(leaf),
     }
@@ -51,22 +65,31 @@ where
 
 struct PredicatePushdown;
 
-
 // Choose which scan operator to use based on predicate
 impl OptimizerRule for PredicatePushdown {
-    fn name(&self) -> &str { "predicate_pushdown" }
+    fn name(&self) -> &str {
+        "predicate_pushdown"
+    }
 
     fn apply(&self, plan: PhysicalPlan) -> PhysicalPlan {
         rewrite(plan, &|node| match node {
-            PhysicalPlan::Filter {
-                predicate,
-                input,
-            } if matches!(*input, PhysicalPlan::FullScan { .. }) => {
+            PhysicalPlan::Filter { predicate, input }
+                if matches!(*input, PhysicalPlan::FullScan { .. }) =>
+            {
+                
                 match *input {
-                    PhysicalPlan::FullScan { table, columns } => {
-                        PhysicalPlan::ZoneMapScan { table, columns, predicate }
-                    }
-                    other => PhysicalPlan::Filter { predicate, input: Box::new(other) },
+                    PhysicalPlan::FullScan { table, columns } => PhysicalPlan::Filter {
+                        predicate: predicate.clone(),
+                        input: Box::new(PhysicalPlan::ZoneMapScan {
+                            table,
+                            columns,
+                            predicate: predicate,
+                        }),
+                    },
+                    other => PhysicalPlan::Filter {
+                        predicate,
+                        input: Box::new(other),
+                    },
                 }
             }
             other => other,
@@ -74,11 +97,12 @@ impl OptimizerRule for PredicatePushdown {
     }
 }
 
-
 struct EliminateTrueFilter;
 
 impl OptimizerRule for EliminateTrueFilter {
-    fn name(&self) -> &str { "eliminate_true_filter" }
+    fn name(&self) -> &str {
+        "eliminate_true_filter"
+    }
 
     fn apply(&self, plan: PhysicalPlan) -> PhysicalPlan {
         rewrite(plan, &|node| match node {
@@ -91,11 +115,12 @@ impl OptimizerRule for EliminateTrueFilter {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::physical_operators::{AggFunc, AggSpec, CmpOp, LiteralValue, PhysicalExpr, PhysicalPlan};
+    use crate::physical_plan::physical_operators::{
+        AggFunc, AggSpec, CmpOp, LiteralValue, PhysicalExpr, PhysicalPlan,
+    };
 
     fn col(name: &str) -> PhysicalExpr {
         PhysicalExpr::Column(name.to_string())
@@ -126,24 +151,32 @@ mod tests {
         println!("{}", optimized);
 
         match optimized {
-            PhysicalPlan::ZoneMapScan { table, columns, predicate } => {
-                assert_eq!(table, "users");
-                assert_eq!(columns, vec!["age", "name"]);
-                match predicate {
-                    PhysicalExpr::Compare { left, op, right } => {
-                        match (*left, op, *right) {
+            PhysicalPlan::Filter {
+                predicate: _,
+                input,
+            } => match *input {
+                PhysicalPlan::ZoneMapScan {
+                    table,
+                    columns,
+                    predicate,
+                } => {
+                    assert_eq!(table, "users");
+                    assert_eq!(columns, vec!["age", "name"]);
+                    match predicate {
+                        PhysicalExpr::Compare { left, op, right } => match (*left, op, *right) {
                             (
                                 PhysicalExpr::Column(col),
                                 CmpOp::Gt,
                                 PhysicalExpr::Literal(LiteralValue::I64(30)),
                             ) => assert_eq!(col, "age"),
                             _ => panic!("unexpected predicate shape"),
-                        }
+                        },
+                        _ => panic!("expected BinaryOp predicate"),
                     }
-                    _ => panic!("expected BinaryOp predicate"),
                 }
-            }
-            _ => panic!("expected ZoneMapScan after pushdown"),
+                _ => panic!("expected ZoneMapScan under Filter"),
+            },
+            _ => panic!("expected Filter wrapping ZoneMapScan after pushdown"),
         }
     }
 
