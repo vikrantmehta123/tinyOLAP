@@ -26,6 +26,14 @@ fn zone_map_can_skip(predicate: &PhysicalExpr, zone_map: &ZoneMap) -> bool {
                 match zone_map.get(col_name) {
                     None => false,
                     Some(col_zone) => {
+
+                        // Verify that there are entries in the zonemap.
+                        // In a zone map, entries are supposed to be
+                        // present always, but in case of corruption, etc., 
+                        // this is a safety check.
+                        let Some(_) = col_zone.entries.first() else {
+                            return false;
+                        };
                         let e = &col_zone.entries[0];
                         match (col_zone.type_tag, lit) {
                             (1..=4, LiteralValue::I64(v)) => {
@@ -91,15 +99,17 @@ fn cmp_can_skip_float(op: &CmpOp, min: f64, max: f64, v: f64) -> bool {
         CmpOp::Lt => min >= v,
         CmpOp::LtEq => min > v,
         CmpOp::Eq => v < min || v > max,
-        CmpOp::NotEq => min == max && (min - v).abs() < f64::EPSILON,
+        CmpOp::NotEq => min == max && min == v,
     }
 }
 
+/// Skip the Part Level Reading.
+/// Filtering is not done at scan level.
 pub struct ZoneMapScanExec {
     work_source: Arc<dyn ScanWorkSource>,
     columns: Vec<ColumnSchema>, // which columns to read, in output order
     schema: Arc<Schema>,        // Arrow schema cached once for reuse
-    predicate: PhysicalExpr,
+    skip_predicate: PhysicalExpr, // the predicate used to skip parts from being read
 }
 
 impl ZoneMapScanExec {
@@ -107,18 +117,19 @@ impl ZoneMapScanExec {
         work_source: Arc<dyn ScanWorkSource>,
         columns: Vec<ColumnSchema>,
         schema: Arc<Schema>,
-        predicate: PhysicalExpr,
+        skip_predicate: PhysicalExpr,
     ) -> Self {
         Self {
             work_source,
             columns,
             schema,
-            predicate,
+            skip_predicate,
         }
     }
 
-    /// Given a path to a part, reads the data and casts it into a RecordBatch
-    /// All subsequent query processing operators use RecordBatch as input
+    /// Returns raw `RecordBatch`es for parts that pass the zone-map check.
+    /// Does NOT apply the predicate at the row level — the caller must wrap
+    /// this in a `FilterExec` to produce correct results.
     fn read_part(&self, part_dir: &Path) -> Result<RecordBatch, ExecutionError> {
         let arrays: Vec<ArrayRef> = self
             .columns
@@ -158,9 +169,14 @@ impl ExecutionPlan for ZoneMapScanExec {
                 Some(dir) => {
                     let zone_map = match read_zone_map(&dir) {
                         Ok(zm) => zm,
-                        Err(e) => return Some(Err(ExecutionError::Io(e))),
+
+                        // Some error due to which zone map couldn't be read.
+                        // This is not supposed to happen- as Zone Maps are always supposed
+                        // to exist for a given part. But say this happens, then read the part
+                        // just to be safe.
+                        Err(_) => return Some(self.read_part(&dir)),
                     };
-                    if zone_map_can_skip(&self.predicate, &zone_map) {
+                    if zone_map_can_skip(&self.skip_predicate, &zone_map) {
                         continue;
                     }
 

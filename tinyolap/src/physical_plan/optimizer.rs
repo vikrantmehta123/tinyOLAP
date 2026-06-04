@@ -76,6 +76,7 @@ impl OptimizerRule for PredicatePushdown {
             PhysicalPlan::Filter { predicate, input }
                 if matches!(*input, PhysicalPlan::FullScan { .. }) =>
             {
+                
                 match *input {
                     PhysicalPlan::FullScan { table, columns } => PhysicalPlan::Filter {
                         predicate: predicate.clone(),
