@@ -9,20 +9,20 @@ It is a work-in-progress and it is not trying to be a production ready project.
 - Data can be INSERTed into a table. Data lives on disk as immutable parts, lz4-compressed, with per-column files and a mark index for granule lookup.
 - SELECT statements with filters and projections. GROUP BY statements with aggregations (COUNT, SUM, MIN, MAX, AVG). 
 - Parallelized Query Processing: a query pipeline is cloned and executed in parallel, and a gather operation collects results from parallel threads.
+- Zone Maps over numeric columns. Zone Maps are implemented at a granularity of a part. If skip_predicate doesn't pass, then reading the entire part will be skipped.
 
 ## What Doesn't Work
 
 - No DELETE, UPDATE statements
 - No compaction of parts.
-- No indexes, or zone-maps.
+- No indexes.
 - The SQL surface is narrow. The parser is `sqlparser-rs`; the analyzer that lowers it is hand-rolled and will reject most things outside the path above.
 - No network layer, no client protocol. Only CLI interface is present.
 
 ## What's Next
 
-1. Zone Maps Per Granule
-2. SIMD Friendly Hash-Map Lookup
-3. Compaction of parts in a background task.
+1. SIMD Friendly Hash-Map Lookup
+2. Compaction of parts in a background task.
 
 ## Benchmarks
 
@@ -52,13 +52,14 @@ See [`tinyolap/benches/README.md`](tinyolap/benches/README.md) for the full meth
 ## Design Decisions
 
 - Marks are at granule level and not row level. Row level indexes will grow metadata. Granule-level index keeps the index small enough to hold in memory and can be efficiently used in indexes.
+- ZoneMaps are also kept at a part level.
 - Arrow format for in-memory buffers. On-disk columnar shape matches arrow format and this provides SIMD computation on arrays.
 
 ## On-Disk Layout of Data
 
 One INSERT produces one part. Parts are immutable. A write goes to `tmp_part_NNNNN/` and is atomically renamed into place on success, so a crash mid-insert never leaves a half-written part visible to readers.
 
-Inside a column file, data is grouped into **granules** of 512 values. A granule is the atomic addressable unit — one mark per granule, and predicate pushdown skips at granule granularity. Multiple granules pack into a **block** of roughly 8 KiB uncompressed bytes per lz4 call.
+Inside a column file, data is grouped into **granules** of 512 values. A granule is the atomic addressable unit — one mark per granule, and predicate pushdown skips at part granularity. Multiple granules pack into a **block** of roughly 8 KiB uncompressed bytes per lz4 call.
 
 This design is inspired by ClickHouse.
 
