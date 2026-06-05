@@ -1,10 +1,14 @@
+//! Relational Algebra Operator: Projection
+//! 
+//! Selects the columns that we want in the output.
+
 use arrow::array::RecordBatch;
 use std::fmt;
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::physical_plan::physical_operators::PhysicalExpr;
 
 pub struct ProjectExec {
-    projections: Vec<PhysicalExpr>,
+    projections: Vec<PhysicalExpr>, // The columns to select
     child: Box<dyn ExecutionPlan>,
 }
 
