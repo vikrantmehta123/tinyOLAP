@@ -1,5 +1,9 @@
-//! SQL Shape validation — rejects SQL structures that tinyOLAP does not support.
+//! SQL Shape validation
+//! 
+//! Rejects SQL structures that tinyOLAP does not support. For example, 
+//! if we detect a JOIN clause in the query, validator will throw an error.
 //! Runs before the analyzer; it only checks the structure of the AST.
+//! Semantic errors are handled in the analyzer.
 
 
 use sqlparser::ast::{
@@ -7,6 +11,9 @@ use sqlparser::ast::{
     SetExpr, Statement, TableFactor
 };
 
+/// We do not validate INSERT statements. For the moment, 
+/// we assume they will be correct. But we do validate SELECT
+/// statements and the clauses inside them.
 pub fn validate(stmt: &Statement) -> Result<(), String> {
     match stmt {
         Statement::Insert(_) => Ok(()), 
@@ -40,6 +47,7 @@ fn validate_select(select: &sqlparser::ast::Select) -> Result<(), String> {
 
     
     // TODO: Implement a validation for HAVING clause when that clause is supported
+    // Currently it is not supported
 
 
     if select.from.len() != 1 {

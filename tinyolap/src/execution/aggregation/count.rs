@@ -1,3 +1,5 @@
+//! Implements Accumulator for Count aggregate
+
 use std::sync::Arc;
 
 use arrow::{
@@ -46,14 +48,21 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
-    fn merge(&mut self, batch: &RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError> {
+    fn merge(
+        &mut self,
+        batch: &RecordBatch,
+        group_indices: &[u32],
+        num_groups: usize,
+    ) -> Result<(), ExecutionError> {
         if self.counts.len() < num_groups {
             self.counts.resize(num_groups, 0);
         }
 
         let field = self.output_field();
         let colname = field.name();
-        let col_ref = batch.column_by_name(colname).ok_or_else(|| ExecutionError::InvalidData(colname.to_string()))?; 
+        let col_ref = batch
+            .column_by_name(colname)
+            .ok_or_else(|| ExecutionError::InvalidData(colname.to_string()))?;
 
         let arr = col_ref
             .as_any()

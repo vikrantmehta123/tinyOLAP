@@ -1,3 +1,5 @@
+//! Recursively Lower the LogicalPlan onto Physical Plan
+
 use std::collections::BTreeSet;
 
 use crate::catalog::schema::DataType;

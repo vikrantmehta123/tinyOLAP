@@ -1,6 +1,6 @@
 //! Defines the Logical Plan Operators.
-//! These operators will be used when defining a query plan for
-//! query processing.
+//! These operators will be used when defining a logical 
+//! query plan for query processing.
 
 use crate::catalog::schema::DataType;
 use std::fmt;
@@ -72,48 +72,6 @@ pub enum LogicalPlan {
         limit: u64,
         input: Box<LogicalPlan>,
     },
-}
-
-impl LogicalPlan {
-    // Returns references to child nodes. Used by the optimizer to traverse the tree.
-    pub fn children(&self) -> Vec<&LogicalPlan> {
-        match self {
-            LogicalPlan::Scan { .. } => vec![],
-            LogicalPlan::Filter { input, .. } => vec![input],
-            LogicalPlan::Project { input, .. } => vec![input],
-            LogicalPlan::Aggregate { input, .. } => vec![input],
-            LogicalPlan::Limit { input, .. } => vec![input],
-        }
-    }
-
-    // Rebuilds this node with rewritten children.
-    // Used when rewriting the Logical Plan using OptimizerRules
-    pub fn with_new_children(self, mut new_children: Vec<LogicalPlan>) -> LogicalPlan {
-        match self {
-            LogicalPlan::Scan { .. } => self,
-            LogicalPlan::Filter { predicate, .. } => LogicalPlan::Filter {
-                predicate,
-                input: Box::new(new_children.remove(0)),
-            },
-            LogicalPlan::Project { projections, .. } => LogicalPlan::Project {
-                projections,
-                input: Box::new(new_children.remove(0)),
-            },
-            LogicalPlan::Aggregate {
-                group_by,
-                aggregates,
-                ..
-            } => LogicalPlan::Aggregate {
-                group_by,
-                aggregates,
-                input: Box::new(new_children.remove(0)),
-            },
-            LogicalPlan::Limit { limit, .. } => LogicalPlan::Limit {
-                limit,
-                input: Box::new(new_children.remove(0)),
-            },
-        }
-    }
 }
 
 impl fmt::Display for LogicalPlan {

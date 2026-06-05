@@ -1,3 +1,5 @@
+//! Implementation of Max function
+
 use std::sync::Arc;
 
 use arrow::{

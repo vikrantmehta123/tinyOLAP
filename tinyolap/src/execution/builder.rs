@@ -22,10 +22,11 @@ use crate::execution::aggregation::min::MinAccumulator;
 use crate::execution::aggregation::sum::SumAccumulator;
 use crate::execution::executor::{ExecutionError, ExecutionPlan};
 use crate::execution::filter::FilterExec;
-use crate::execution::full_scan::{FullScanExec, PartWorkSource};
+use crate::execution::full_scan::{FullScanExec};
 use crate::execution::gather::GatherExec;
 use crate::execution::limit::LimitExec;
 use crate::execution::project::ProjectExec;
+use crate::execution::work_source::PartWorkSource;
 use crate::execution::zone_map_scan::ZoneMapScanExec;
 use crate::physical_plan::physical_operators::{AggFunc, AggSpec, PhysicalExpr, PhysicalPlan};
 

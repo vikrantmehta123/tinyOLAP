@@ -1,10 +1,17 @@
-pub mod count;
-pub mod sum;
-pub mod min;
-pub mod max;
+//! This module defines the traits and structs for aggregations
+//! 
+//! We support sum, avg, count, min, max. Each aggregate function
+//! implements an Accumulator trait. This trait knows how to update
+//! the internal state of the aggregate and how to merge and finalise
+//! the outputs
+
 pub mod avg;
+pub mod count;
 pub mod hash_aggregate;
+pub mod max;
 pub mod merge_aggregate;
+pub mod min;
+pub mod sum;
 
 use arrow::{
     array::{ArrayRef, RecordBatch},
@@ -26,13 +33,17 @@ pub trait Accumulator: Send {
         num_groups: usize,
     ) -> Result<(), ExecutionError>;
 
-
     // Used by MergeAggregateExec
     // N accumulators will run in parallel in HashAggregateExec
     // Due to this, we need to introduce a merge operation to appropriately
     // combine the results from different threads.
     // This is done in MergeAggregateExec
-    fn merge(&mut self, batch: &RecordBatch, group_indices: &[u32], num_groups: usize) -> Result<(), ExecutionError>;
+    fn merge(
+        &mut self,
+        batch: &RecordBatch,
+        group_indices: &[u32],
+        num_groups: usize,
+    ) -> Result<(), ExecutionError>;
 
     /// Produce the final ArrayRef from the accumulated intermediate state.
     fn materialize(&mut self) -> ArrayRef;

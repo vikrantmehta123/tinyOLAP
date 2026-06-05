@@ -1,3 +1,9 @@
+//! FilterExec: Filters rows from batch based on predicate
+//!
+//! Given a predicate and a batch of rows, we want to evaluate
+//! which rows pass the predicate and emit those rows as a new batch.
+//! FilterExec implements this.
+
 use arrow::array::RecordBatch;
 use arrow::compute::filter_record_batch;
 use std::boxed::Box;
@@ -26,6 +32,7 @@ impl ExecutionPlan for FilterExec {
                 Err(e) => return Some(Err(e)),
             };
 
+            // Do two tight loops: first compute the mask and then filter the rows
             let mask = match evaluate_predicate(&self.predicate, &batch) {
                 Ok(m) => m,
                 Err(e) => return Some(Err(e)),
@@ -35,8 +42,10 @@ impl ExecutionPlan for FilterExec {
                 Ok(b) => b,
                 Err(e) => return Some(Err(e.into())),
             };
-            
+
             // Skip empty batches — keep the non-empty contract for downstream.
+            // Aggregations treat empty batch differently. So don't return
+            // anything if there's an empty batch
             if filtered.num_rows() > 0 {
                 return Some(Ok(filtered));
             }
@@ -49,9 +58,7 @@ impl ExecutionPlan for FilterExec {
         writeln!(f, "{}Filter({})", indent, self.predicate)?;
         self.child.fmt_indented(f, depth + 1)
     }
-
 }
-
 
 impl fmt::Display for FilterExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
