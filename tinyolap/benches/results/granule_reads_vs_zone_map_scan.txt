@@ -1,0 +1,66 @@
+queries/Q1_scan_sum_single_column
+                        time:   [53.195 ms 54.546 ms 55.250 ms]
+                        thrpt:  [452.49 Melem/s 458.33 Melem/s 469.97 Melem/s]
+                 change:
+                        time:   [−74.585% −72.672% −71.007%] (p = 0.00 < 0.05)
+                        thrpt:  [+244.91% +265.93% +293.47%]
+                        Performance has improved.
+queries/Q2_scan_many_aggregates
+                        time:   [297.93 ms 301.67 ms 307.41 ms]
+                        thrpt:  [81.325 Melem/s 82.872 Melem/s 83.912 Melem/s]
+                 change:
+                        time:   [−45.653% −44.930% −43.895%] (p = 0.00 < 0.05)
+                        thrpt:  [+78.236% +81.588% +84.004%]
+                        Performance has improved.
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+queries/Q3_filter_low_selectivity
+                        time:   [89.085 ms 89.413 ms 89.889 ms]
+                        thrpt:  [278.12 Melem/s 279.60 Melem/s 280.63 Melem/s]
+                 change:
+                        time:   [−51.006% −50.570% −50.134%] (p = 0.00 < 0.05)
+                        thrpt:  [+100.54% +102.31% +104.11%]
+                        Performance has improved.
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high severe
+queries/Q4_filter_high_selectivity
+                        time:   [158.35 ms 158.61 ms 159.06 ms]
+                        thrpt:  [157.17 Melem/s 157.62 Melem/s 157.88 Melem/s]
+                 change:
+                        time:   [−45.881% −45.189% −44.541%] (p = 0.00 < 0.05)
+                        thrpt:  [+80.313% +82.444% +84.779%]
+                        Performance has improved.
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high mild
+queries/Q5_groupby_low_cardinality_int
+                        time:   [349.59 ms 351.61 ms 353.50 ms]
+                        thrpt:  [70.722 Melem/s 71.101 Melem/s 71.512 Melem/s]
+                 change:
+                        time:   [−41.778% −41.208% −40.642%] (p = 0.00 < 0.05)
+                        thrpt:  [+68.469% +70.092% +71.757%]
+                        Performance has improved.
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) low mild
+queries/Q6_groupby_high_cardinality_int
+                        time:   [3.3896 s 3.4379 s 3.4865 s]
+                        thrpt:  [7.1706 Melem/s 7.2719 Melem/s 7.3756 Melem/s]
+                 change:
+                        time:   [−27.719% −26.483% −25.095%] (p = 0.00 < 0.05)
+                        thrpt:  [+33.503% +36.023% +38.349%]
+                        Performance has improved.
+queries/Q7_filter_plus_multikey_groupby
+                        time:   [6.0206 s 6.1602 s 6.2947 s]
+                        thrpt:  [3.9716 Melem/s 4.0583 Melem/s 4.1524 Melem/s]
+                 change:
+                        time:   [−20.068% −18.024% −15.844%] (p = 0.00 < 0.05)
+                        thrpt:  [+18.827% +21.987% +25.106%]
+                        Performance has improved.
+queries/Q8_groupby_string
+                        time:   [2.8017 s 2.8177 s 2.8346 s]
+                        thrpt:  [8.8197 Melem/s 8.8724 Melem/s 8.9233 Melem/s]
+                 change:
+                        time:   [−11.033% −9.9432% −8.9106%] (p = 0.00 < 0.05)
+                        thrpt:  [+9.7823% +11.041% +12.402%]
+                        Performance has improved.
+

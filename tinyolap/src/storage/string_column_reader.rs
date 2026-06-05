@@ -2,9 +2,6 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::os::unix::io::AsRawFd;
-use std::sync::Arc;
-
-use arrow::array::{ArrayRef, StringArray};
 
 use crate::encoding::StringCodec;
 use crate::storage::mark::{Mark, MarkReader};
@@ -78,56 +75,4 @@ impl StringColumnReader {
 
         Ok(strings[start..end].to_vec())
     }
-
-    pub fn read_granules(&mut self) -> io::Result<Vec<String>> {
-        let mut out = Vec::new();
-        for i in 0..self.marks.len() {
-            out.extend(self.read_granule(i)?);
-        }
-        Ok(out)
-    }
-
-    pub fn read_all(&mut self) -> io::Result<ArrayRef> {
-        self.bin.seek(SeekFrom::Start(0))?;
-        let mut file_bytes = Vec::new();
-        self.bin.read_to_end(&mut file_bytes)?;
-
-        let mut out = Vec::new();
-        let mut decoded: Vec<String> = Vec::new();
-        let mut last_block_offset = u64::MAX;
-
-        for (i, mark) in self.marks.iter().enumerate() {
-            if mark.block_offset != last_block_offset {
-                let base = mark.block_offset as usize;
-
-                let codec = StringCodec::from_tag(file_bytes[base])
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")))?;
-
-                let compressed_len = u32::from_le_bytes(
-                    file_bytes[base + 1..base + 5].try_into().unwrap()
-                ) as usize;
-
-                let decompressed = lz4_flex::decompress_size_prepended(
-                    &file_bytes[base + 5..base + 5 + compressed_len]
-                ).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-
-                decoded.clear();
-                codec.decode(&decompressed, &mut decoded)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")))?;
-
-                last_block_offset = mark.block_offset;
-            }
-
-            let start = mark.decompressed_offset as usize;
-            let end = match self.marks.get(i + 1) {
-                Some(next) if next.block_offset == mark.block_offset => next.decompressed_offset as usize,
-                _ => decoded.len(),
-            };
-
-            out.extend_from_slice(&decoded[start..end]);
-        }
-
-        Ok(Arc::new(StringArray::from(out)))
-    }
-
 }

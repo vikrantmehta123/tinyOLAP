@@ -28,18 +28,23 @@ It is a work-in-progress and it is not trying to be a production ready project.
 
 A criterion-driven suite of 8 SELECT queries over a fixed 25M-row, 13-column synthetic `events` table (~1 GB on disk, lz4-compressed, 5 parts). Dataset and seed are fixed (`SmallRng::seed_from_u64(42)`).
 
-Results below are from a 4-thread run measured against a serial baseline, on a typical laptop.
+Results below are from a 4-thread run measured against a serial baseline, on a laptop.
 
-| Query | What it tests                          | Serial   | 4 threads | Speedup |
-|-------|----------------------------------------|----------|-----------|---------|
-| Q1    | Scan + SUM, single column              | ~250 ms  | 185 ms    | 1.35×   |
-| Q2    | Scan + 5 aggregates                    | ~870 ms  | 563 ms    | 1.54×   |
-| Q3    | Low-selectivity filter (~0.5% pass)    | ~440 ms  | 430 ms    | ~1.0×   |
-| Q4    | High-selectivity filter (~50% pass)    | ~495 ms  | 280 ms    | 1.77×   |
-| Q5    | GROUP BY low-card int (~200 groups)    | ~1.95 s  | 1.18 s    | 1.66×   |
-| Q6    | GROUP BY high-card int (~1M groups)    | ~12.1 s  | 7.10 s    | 1.71×   |
-| Q7    | Filter + 2-key GROUP BY                | ~12.9 s  | 12.05 s   | 1.07×   |
-| Q8    | GROUP BY string (~20 groups)           | ~5.75 s  | 4.20 s    | 1.37×   |
+## Results
+
+Latest run (`granule_level_read` baseline), 25M rows. Time is criterion's
+median estimate; throughput is rows scanned per second.
+
+| #  | Query                                                                                   | Time     | Throughput      |
+|----|-----------------------------------------------------------------------------------------|----------|-----------------|
+| Q1 | `SELECT SUM(price) FROM events`                                                         | 54.5 ms  | 458.3 Melem/s   |
+| Q2 | `SELECT SUM(price), AVG(quantity), MIN(duration_ms), MAX(duration_ms), COUNT(price) FROM events` | 301.7 ms | 82.9 Melem/s    |
+| Q3 | `SELECT SUM(price) FROM events WHERE ts < 250000`                                        | 89.4 ms  | 279.6 Melem/s   |
+| Q4 | `SELECT SUM(price) FROM events WHERE country_id < 100`                                   | 158.6 ms | 157.6 Melem/s   |
+| Q5 | `SELECT country_id, SUM(price) FROM events GROUP BY country_id`                          | 351.6 ms | 71.1 Melem/s    |
+| Q6 | `SELECT user_id, SUM(price), COUNT(price) FROM events GROUP BY user_id`                  | 3.438 s  | 7.27 Melem/s    |
+| Q7 | `SELECT country_id, city_id, AVG(price) FROM events WHERE ts > 5000000 GROUP BY country_id, city_id` | 6.160 s  | 4.06 Melem/s    |
+| Q8 | `SELECT event_type, SUM(price) FROM events GROUP BY event_type`                          | 2.818 s  | 8.87 Melem/s    |
 
 A few notes:
 

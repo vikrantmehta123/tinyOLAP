@@ -31,7 +31,7 @@ impl GatherExec {
     pub fn new(n_inputs:usize, children: Vec<Box<dyn ExecutionPlan>>) -> Self {
         let child_display = format!("{}", children[0]);
 
-        let (tx, rx) = crossbeam_channel::bounded(1);
+        let (tx, rx) = crossbeam_channel::bounded(128);
         let mut handles = Vec::with_capacity(n_inputs);
 
         for child in children {
