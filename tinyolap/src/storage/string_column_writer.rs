@@ -38,24 +38,6 @@ pub fn write_string_column(
     for s in values {
         let plain_size = 4 + s.len();
 
-        // Size cap: flush before adding a string that would overflow the block.
-        // Never split a string across blocks.
-        if rows_in_current_granule > 0
-            && plain_bytes_in_block + plain_size > BLOCK_BUFFER_SIZE
-        {
-            rows_in_current_granule = 0;
-            flush_block(
-                codec,
-                &mut block_strings,
-                &mut pending_marks,
-                &mut bin,
-                &mut marks,
-                &mut bin_bytes,
-                &mut plain_bytes_in_block,
-                &mut strings_in_block,
-            )?;
-        }
-
         // First row of a new granule: record how many strings precede it in
         // this block. The reader uses this as a direct slice index into Vec<String>.
         if rows_in_current_granule == 0 {

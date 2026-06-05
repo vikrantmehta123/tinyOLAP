@@ -10,13 +10,13 @@
 //!
 //! Note that zonemaps are at a granularity of parts- not granules.
 
-use std::{fmt, path::Path, sync::Arc};
+use std::{fmt, io, sync::Arc};
 
 use arrow::{
-    array::{ArrayRef, RecordBatch},
+    array::{ArrayRef, RecordBatch, StringArray},
     datatypes::Schema,
 };
-
+use crate::storage::arrow_mapping::ArrowMappable;
 use crate::{
     catalog::schema::{ColumnSchema, DataType},
     execution::{
@@ -31,6 +31,11 @@ use crate::{
     },
 };
 
+enum ColumnReaderKind {
+    Numeric(ColumnReader),
+    Str(StringColumnReader),
+}
+
 /// Skip the Part Level Reading.
 /// Filtering is not done at scan level.
 pub struct ZoneMapScanExec {
@@ -38,6 +43,17 @@ pub struct ZoneMapScanExec {
     columns: Vec<ColumnSchema>,   // which columns to read, in output order
     schema: Arc<Schema>,          // Arrow schema cached once for reuse
     skip_predicate: PhysicalExpr, // the predicate used to skip parts from being read
+
+    // the index of the granule that the readers are currently reading
+    // each thread is expected to have its own copy since no two threads
+    // will be reading the same part as guaranteed by the work source
+    granule_idx: usize,
+
+    // The number of granules in the current part
+    granule_count: usize,
+
+    // Keep the readers open per part
+    readers: Vec<ColumnReaderKind>,
 }
 
 impl ZoneMapScanExec {
@@ -52,69 +68,91 @@ impl ZoneMapScanExec {
             columns,
             schema,
             skip_predicate,
+            granule_idx: 0,
+            granule_count: 0,
+            readers: Vec::new(),
         }
-    }
-
-    /// Returns raw `RecordBatch`es for parts that pass the zone-map check.
-    /// Does NOT apply the predicate at the row level — the caller must wrap
-    /// this in a `FilterExec` to produce correct results.
-    fn read_part(&self, part_dir: &Path) -> Result<RecordBatch, ExecutionError> {
-        let arrays: Vec<ArrayRef> = self
-            .columns
-            .iter()
-            .map(|col| -> Result<ArrayRef, ExecutionError> {
-                Ok(match col.data_type {
-                    DataType::I8 => ColumnReader::open(part_dir, &col.name)?.read_all::<i8>()?,
-                    DataType::I16 => ColumnReader::open(part_dir, &col.name)?.read_all::<i16>()?,
-                    DataType::I32 => ColumnReader::open(part_dir, &col.name)?.read_all::<i32>()?,
-                    DataType::I64 => ColumnReader::open(part_dir, &col.name)?.read_all::<i64>()?,
-                    DataType::U8 => ColumnReader::open(part_dir, &col.name)?.read_all::<u8>()?,
-                    DataType::U16 => ColumnReader::open(part_dir, &col.name)?.read_all::<u16>()?,
-                    DataType::U32 => ColumnReader::open(part_dir, &col.name)?.read_all::<u32>()?,
-                    DataType::U64 => ColumnReader::open(part_dir, &col.name)?.read_all::<u64>()?,
-                    DataType::F32 => ColumnReader::open(part_dir, &col.name)?.read_all::<f32>()?,
-                    DataType::F64 => ColumnReader::open(part_dir, &col.name)?.read_all::<f64>()?,
-                    DataType::Bool => {
-                        ColumnReader::open(part_dir, &col.name)?.read_all::<bool>()?
-                    }
-                    DataType::Str => StringColumnReader::open(part_dir, &col.name)?.read_all()?,
-                })
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(RecordBatch::try_new(self.schema.clone(), arrays)?)
     }
 }
 
 impl ExecutionPlan for ZoneMapScanExec {
     fn next_batch(&mut self) -> Option<Result<RecordBatch, ExecutionError>> {
-        // In FullScan, we don't need to have loop because FullScan will always have the next part
-        // or it will be end of stream. But in ZoneMapScan, we may have to loop until we find a
-        // part to read.
-        loop {
-            let part_dir = self.work_source.next_work();
-            match part_dir {
-                Some(dir) => {
-                    let zone_map = match read_zone_map(&dir) {
-                        Ok(zm) => zm,
+        while self.readers.is_empty() {
+            let part_dir = self.work_source.next_work()?;
 
-                        // Some error due to which zone map couldn't be read.
-                        // This is not supposed to happen- as Zone Maps are always supposed
-                        // to exist for a given part. But say this happens, then read the part
-                        // just to be safe.
-                        Err(_) => return Some(self.read_part(&dir)),
-                    };
-                    if zone_map_can_skip(&self.skip_predicate, &zone_map) {
-                        continue;
-                    }
-
-                    return Some(self.read_part(&dir));
-                }
-                None => {
-                    return None;
-                }
+            let zone_map = match read_zone_map(&part_dir) {
+                Ok(zm) => zm,
+                Err(_) => ZoneMap::default(),
+            };
+            if zone_map_can_skip(&self.skip_predicate, &zone_map) {
+                continue;
             }
+
+            let readers: io::Result<Vec<ColumnReaderKind>> = self
+                .columns
+                .iter()
+                .map(|col| {
+                    Ok(match col.data_type {
+                        DataType::Str => {
+                            ColumnReaderKind::Str(StringColumnReader::open(&part_dir, &col.name)?)
+                        }
+                        _ => ColumnReaderKind::Numeric(ColumnReader::open(&part_dir, &col.name)?),
+                    })
+                })
+                .collect();
+
+            self.readers = match readers {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e.into())),
+            };
+            self.granule_count = match &self.readers[0] {
+                ColumnReaderKind::Numeric(r) => r.granule_count(),
+                ColumnReaderKind::Str(r) => r.granule_count(),
+            };
+            self.granule_idx = 0;
         }
+
+        let idx = self.granule_idx;
+
+        let arrays = self
+            .columns
+            .iter()
+            .zip(self.readers.iter_mut())
+            .map(|(col, reader)| -> Result<ArrayRef, ExecutionError> {
+                Ok(match reader {
+                    ColumnReaderKind::Numeric(r) => match col.data_type {
+                        DataType::I8 => i8::into_array(r.read_granule::<i8>(idx)?),
+                        DataType::I16 => i16::into_array(r.read_granule::<i16>(idx)?),
+                        DataType::I32 => i32::into_array(r.read_granule::<i32>(idx)?),
+                        DataType::I64 => i64::into_array(r.read_granule::<i64>(idx)?),
+                        DataType::U8 => u8::into_array(r.read_granule::<u8>(idx)?),
+                        DataType::U16 => u16::into_array(r.read_granule::<u16>(idx)?),
+                        DataType::U32 => u32::into_array(r.read_granule::<u32>(idx)?),
+                        DataType::U64 => u64::into_array(r.read_granule::<u64>(idx)?),
+                        DataType::F32 => f32::into_array(r.read_granule::<f32>(idx)?),
+                        DataType::F64 => f64::into_array(r.read_granule::<f64>(idx)?),
+                        DataType::Bool => bool::into_array(r.read_granule::<bool>(idx)?),
+                        DataType::Str => unreachable!(),
+                    },
+                    ColumnReaderKind::Str(r) => {
+                        let v = r.read_granule(idx)?;
+                        Arc::new(StringArray::from(v))
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>();
+
+        let arrays = match arrays {
+            Ok(a) => a,
+            Err(e) => return Some(Err(e)),
+        };
+
+        self.granule_idx += 1;
+        if self.granule_idx >= self.granule_count {
+            self.readers.clear();
+        }
+
+        Some(RecordBatch::try_new(self.schema.clone(), arrays).map_err(ExecutionError::from))
     }
 
     fn fmt_indented(&self, f: &mut std::fmt::Formatter<'_>, depth: usize) -> fmt::Result {
