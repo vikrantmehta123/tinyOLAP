@@ -4,12 +4,11 @@
 //   n     : I64  -> [1, 2, 3, 4, 5, 6]   (sum 21, min 1, max 6, count 6, avg 3.5)
 //   price : F64  -> [10, 20, 30, 40, 50, 60]   (sum 210, max 60)
 
-mod common;
 
 use arrow::array::{Float64Array, Int64Array, UInt64Array};
 use tinyolap::run_select_collect;
 
-use common::setup_basic_table;
+use crate::common::setup_basic_table;
 
 #[test]
 fn sum_of_i64_column() {
