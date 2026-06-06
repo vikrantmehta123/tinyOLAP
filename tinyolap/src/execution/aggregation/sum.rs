@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arrow::array::{
     ArrayRef, ArrowNumericType, ArrowPrimitiveType, Float64Array, Int64Array, PrimitiveArray, RecordBatch, UInt64Array
 };
-use arrow::compute::kernels::aggregate;
+
 use arrow::datatypes::{
     DataType, Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     UInt8Type, UInt16Type, UInt32Type, UInt64Type,
@@ -194,11 +194,15 @@ where
             .downcast_ref::<PrimitiveArray<T>>()
             .expect("SumExec: column type does not match T — planner bug");
 
-        // No GROUP BY => we can use SIMD
+        // No GROUP BY
         if num_groups == 1 {
-            if let Some(partial) = aggregate::sum(arr) {
-                self.running_sums[0] += partial.into();
+            // Accumulate in the widened type
+            let mut acc = T::Widened::default();
+
+            for &v in arr.values().iter() {
+                acc += v.into();
             }
+            self.running_sums[0] += acc;
             return Ok(());
         }
 

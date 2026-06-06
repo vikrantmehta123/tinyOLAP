@@ -46,13 +46,7 @@ median estimate; throughput is rows scanned per second.
 | Q7 | `SELECT country_id, city_id, AVG(price) FROM events WHERE ts > 5000000 GROUP BY country_id, city_id` | 6.160 s  | 4.06 Melem/s    |
 | Q8 | `SELECT event_type, SUM(price) FROM events GROUP BY event_type`                          | 2.818 s  | 8.87 Melem/s    |
 
-A few notes:
-
-- **Speedups cap well below 4×.** Operator-chain overhead, per-batch dispatch, and gather contention all bite. Q7's 1.07× is the clearest sign — the filter + multi-key GROUP BY chain spends a lot of time outside the parallelizable scan.
-- **Q3 barely moves** because today every query scans every granule. Zone maps (next on the roadmap) should turn Q3 into a near-no-op rather than a parallelism problem.
-- **Running parallel code paths on 1 thread is ~50% slower than the original serial baseline.** The parallel dispatch overhead is real and only pays off above 1 thread.
-
-See [`tinyolap/benches/README.md`](tinyolap/benches/README.md) for the full methodology — dataset rationale, query selection, criterion config, and why throughput numbers will need re-interpretation once granule-skipping lands.
+See [`tinyolap/benches/README.md`](tinyolap/benches/README.md) for the full methodology — dataset rationale, query selection, criterion config.
 
 ## Design Decisions
 
