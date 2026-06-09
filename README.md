@@ -21,8 +21,9 @@ It is a work-in-progress and it is not trying to be a production ready project.
 
 ## What's Next
 
-1. SIMD Friendly Hash-Map Lookup
-2. Compaction of parts in a background task.
+1. Compaction of parts in a background task.
+2. LIMIT clause support
+3. Threadpool for concurrent query execution
 
 ## Benchmarks
 
