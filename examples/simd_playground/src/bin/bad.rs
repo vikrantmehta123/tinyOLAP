@@ -56,6 +56,38 @@ fn bad_bounding_strategy(arr: &[i32], idx: &[usize]) -> i32 {
     total
 }
 
+/// For floats, some reductions cannot be vectorized. 
+/// Because due to precision errors some float reductions are 
+/// not associative.
+/// For example: (a+b)+c != a+(b+c) for floats due to weird 
+/// precision errors.
+/// 
+/// Vectorizing reductions requires reordering of the reduction 
+/// operation and because it's not associative, reduction may 
+/// is not possible on floats by default.
+/// 
+/// But note that if you have element wise float operations, 
+/// like: a[i] * 2.0, those can still be vectorized.
+/// 
+/// For many cases, we can work without the last few precision points.
+/// So we need to explicitly tell the compiler that it's safe to 
+/// reorder the reduction on floats.
+/// 
+/// By default, sum, product are not vectorized for floats.
+/// Since sum is not vectorized, avg also isn't vectorized.
+/// But min, max, count, and, or, xor are vectorized for floats.
+/// 
+/// In C/C++, we have ffast-math flag that tells compiler to assume
+/// that floats are associative on sum/product and then we can 
+/// vectorize. In rust, we don't have such flag.
+#[unsafe(no_mangle)]
+#[inline(never)]
+fn sum_f32(a: &[f32]) -> f32 {
+    let mut s = 0.0;
+    for &x in a { s += x; }
+    s
+}
+
 fn main() {
     
 }

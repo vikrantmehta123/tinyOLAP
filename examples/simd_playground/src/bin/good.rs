@@ -115,8 +115,74 @@ fn good_prefix_sum(pref_array: &mut [i32], nums: &[i32]) {
 
 }
 
+/// A sum is a reduction operation. For integer types, reduction
+/// operations can be vectorized. It vectorizes because sum
+/// is an associative operation. The way it will vectorize it 
+/// is as follows:
+///     let nums = [1, 2, 3, 4, 5, 6, 7, 8]
+///     
+///     Step 1: vpaddd: [1, 2, 3, 4] + [5, 6, 7, 8] = [6, 8, 10, 12]
+///     Step 2: Either again do vpaddd or do scalar adds on this.
+/// 
+/// Note that the ordering got changed. It is no longer (1+2+3+...)
+/// but rather (1+5) + (2+6)...
+/// 
+/// By default, every reduction operation can be vectorized for ints.
+#[unsafe(no_mangle)]
+#[inline(never)]
+fn sum_i32(a: &[i32]) -> i32 {
+    let mut s = 0;
+    for &x in a { s += x; }
+    s
+}
+
+
+/// Float sum/product are not vectorizable by default.
+/// So we make them vectorizable.
+/// 
+/// Instead of keeping one accumulator, we keep 4 accumulators.
+/// And we load four elements at a time in the 128-bit registers
+/// and then we add those into the accumulators.
+/// 
+/// At the end, we sum these accumulators to get the final result.
+/// 
+/// We explicitly wrote the code that is vectorized. The compiler
+/// isn't vectorizing this. We are.
+#[unsafe(no_mangle)]
+#[inline(never)]
+fn sum_f32(a: &[f32]) -> f32 {
+    unsafe {
+        // 4 lanes, all initialized to 0.0
+        let mut acc = _mm_setzero_ps();  
+        
+        let mut i = 0;
+        while i + 4 <= a.len() {
+            let v = _mm_loadu_ps(a.as_ptr().add(i));   // load 4 floats
+            acc = _mm_add_ps(acc, v);                  // PACKED add — 4 at once
+            i += 4;
+        }
+
+        let mut s = 0.0;
+        while i < a.len() {
+            s += a[i];
+            i += 1;
+        }
+
+        let mut tmp = [0.0f32; 4];                  // a normal array of 4 floats
+        _mm_storeu_ps(tmp.as_mut_ptr(), acc);       // copy acc's 4 lanes → tmp[0..4]
+        s += tmp[0] + tmp[1] + tmp[2] + tmp[3];  // now they're plain f32 — just add
+
+
+        s
+    }
+}
+
+
+
 fn main() {
     let mut out = [0; 10];
     good_prefix_sum(&mut out, &[2, 1, 3, 5, 1, 4, 2, 3, 6, 2]);
     println!("{:?}", out);   // expect [2, 3, 6, 11, 12, 16, 18, 21, 27, 29]
 }
+
+
