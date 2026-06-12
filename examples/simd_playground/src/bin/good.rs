@@ -53,20 +53,29 @@ use std::arch::x86_64::*;
 /// are there. So we return [27, 29] for this chunk.
 ///
 /// Final returned array: [2, 3, 6, 11, 12, 16, 18, 21, 27, 29]
+/// 
+/// In the code below, we are only working with x86_64 architecture.
+/// And we are not worried about integer overflow.
 #[cfg(target_arch = "x86_64")]
 #[unsafe(no_mangle)]
 #[inline(never)]
 fn good_prefix_sum(pref_array: &mut [i32], nums: &[i32]) {
-    unsafe {
-        // The carry for the current chunk
-        let mut carry = 0i32;
+    assert!(pref_array.len() >= nums.len(), "pref_array must be at least as long as nums");
 
-        // What chunk we are at?
-        let mut i = 0;
+    // The carry for the current chunk
+    let mut carry = 0i32;
+
+    // What chunk we are at?
+    let mut i = 0;
+
+
+    // SAFETY: assert guarantees pref_array.len() >= nums.len(); the loop
+    // condition i+4 <= nums.len() keeps every 16-byte load/store in bounds.
+    unsafe {
 
         while i + 4 <= nums.len() {
-            // The si128 is the vector register. We have 32 bit integer array.
-            // So with this, we are essentially loading first 128 bits from the
+            // The si128 is a vector register. We have 32 bit integer array.
+            // So with this, we are essentially loading 128 bits from the
             // ptr into the register => Load the four integers in register.
             // This means loading the four integer chunks of the array.
             // The index 'i' gives us the starting index/ptr of the chunk.
@@ -82,28 +91,28 @@ fn good_prefix_sum(pref_array: &mut [i32], nums: &[i32]) {
             // Phase 1, Step 2: Shift by two numbers i.e. 8 bytes
             let shift_2 = _mm_slli_si128(v, 8);
 
-            // Phase 1, Step 2. Add the two numbers
+            // Phase 1, Step 2. Add
             v = _mm_add_epi32(v, shift_2);
 
             // Phase 2: Broadcast and Apply Carry
             v = _mm_add_epi32(v, _mm_set1_epi32(carry));
 
-            // NStore the chunk's prefix sum in the output array. Again we 
+            // Store the chunk's prefix sum in the output array. Again we 
             // use 'i' to get the pointer to the start of the output chunk.
             _mm_storeu_si128(pref_array.as_mut_ptr().add(i) as *mut __m128i, v);
             
             carry = pref_array[i + 3];
             i += 4;
         }
-
-        // The remaining n%4 elements to be added in the pref_array
-        // We simply loop over them and do scalar addition.
-        while i < nums.len() {
-            pref_array[i] = carry + nums[i];
-            carry = pref_array[i];
-            i += 1;
-        }
     }
+    // The remaining n%4 elements to be added in the pref_array
+    // We simply loop over them and do scalar addition.
+    while i < nums.len() {
+        pref_array[i] = carry + nums[i];
+        carry = pref_array[i];
+        i += 1;
+    }
+
 }
 
 fn main() {
