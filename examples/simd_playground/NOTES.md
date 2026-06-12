@@ -143,8 +143,6 @@ In this case, the compiler knows that the outer loop will run n times. So it can
 
 A recurrence requires constant step in each iteration. So if your induction variables have recurrence, you're good. Else you're not.
 
-<!-- TODO: Bounds Check Elimination check that the compiler does and how it affects vectorisation -->
-
 ---
 
 # SIMD Playground
