@@ -5,3 +5,4 @@ tinyolap/benches/data/
 *.pdf
 target/
 .vscode/
+.claude/
