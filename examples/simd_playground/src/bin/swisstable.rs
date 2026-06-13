@@ -2,39 +2,46 @@
 //!
 //! Swisstables are SIMD-friendly hash tables. In this file, I
 //! mostly derive the data structure and why it's SIMD friendly.
+//! The actual implementation of Swisstable may contain certain
+//! other optimizations too that I have not considered.
+//! Further, in my implementation there is no resizing. The hash
+//! table is fixed size and it will loop forever once it is full.
+//! Ideally, we would resize this based on load factor.
 //!
 //! Traditionally, hashtables handled collisions in one of two ways:
 //!     1. Linked Lists
 //!     2. Linear Probing
-//! There may be other sophisticated ways, but more or less these were dominant.
-//! Linked Lists weren't preferred because they lead to a lot of pointer chasing.
-//! So most implementations use linear probing.
+//! There may be other sophisticated ways, but more or less these were
+//! dominant. Linked Lists weren't preferred because they lead to a lot
+//! of pointer chasing. So most implementations use linear probing.
 //!
 //! Linear Probing too has problems:
 //! 1. Tombstones make lookups expensive:
 //!     As the hash table sees churn, it gets a lot of tombstones entries.
 //!     The tombstones are flags that say that the current slot is empty for
-//!     inserts but for lookups, you should keep on probing. Due to these tombstones,
-//!     lookups become a expensive, though tombstones dont necessarily have impact on
-//!     inserts. Due to tombstones, the table may effectively be empty yet the linear
-//!     probe might need to happen for a lot of slots.
+//!     inserts but for lookups, you should keep on probing. Due to these
+//!     tombstones, lookups become a expensive, though tombstones dont
+//!     necessarily have impact on inserts. Due to tombstones, the table may
+//!     effectively be empty yet the linear probe might need to happen for
+//!     a lot of slots.
 //! 2. Naive comparison of keys becomes expensive:
-//!     When using linear probing, the hashtable needs to compare the key in slot with
-//!     the lookup key. Often, the keys may be strings or such. Comparing strings isn't
-//!     cheap. And for linear probing, you may need to walk and compare a lot before you
-//!     hit a match. So that's a lot of wasted effort.
+//!     When using linear probing, the hashtable needs to compare the key in
+//!     slot with   the lookup key. Often, the keys may be strings or such.
+//!     Comparing strings isn't cheap. And for linear probing, you may need
+//!     to walk and compare a lot before you hit a match. So that's a lot of
+//!     wasted effort.
 //!
-//! Now, swisstables are not a simple data structure. It's a specialized hash table that
-//! tries to overcome the above problems by utilising the modern hardware ( and its simd
-//! instructions ) and certain other clever things.
+//! Now, swisstable is not a simple data structure. It's a specialized hash
+//! table that tries to overcome the above problems by utilising the modern
+//! hardware ( and its simd instructions ) and certain other clever things.
 //!
-//! For the moment, we assume that we resize the capacity after a threshold of load factor
-//! and we resize it 2x. So capacity is always a power of two.
+//! For this discussion, assume that we resize the capacity after a threshold
+//! of load factor and we resize it 2x. So capacity is always a power of two.
 //!
-//! Now, the key insights that the swisstable has.
+//! Now, the key insights that the swisstable is based on.
 //! 1. A hash function outputs a 64 bit number. For most cases, several
-//!     bits from this hashed output are wasted. Because we take % capacity
-//!     of array.
+//!     bits from this hashed output are wasted. Because we take mod of
+//!     capacity of array.
 //!     Assume that hash % capacity = hash & (capacity - 1). This holds when
 //!     capacity is a power of two. There is a mathematical proof for this
 //!     but for now, we don't want to get into that. We assume this to be true.
@@ -118,93 +125,19 @@ where
         hasher.finish()
     }
 
-    fn delete(&mut self, key: &K) {
-        let hash = self.make_hash(&key);
-        let capacity = self.ctrl.len() as u64;
-        let idx = (hash & (capacity - 1u64)) as usize;
-        let fingerprint = (hash >> 57) as u8;
-
-        let mut group_start: usize = idx & !(16 - 1);
-
-        loop {
-            unsafe {
-                let v = _mm_loadu_si128(self.ctrl.as_ptr().add(group_start) as *const __m128i);
-                let broadcast = _mm_set1_epi8(fingerprint as i8);
-                let comparison_result = _mm_cmpeq_epi8(v, broadcast);
-                let selection = _mm_movemask_epi8(comparison_result) as u16;
-
-                let mut mask = selection;
-                while mask != 0 {
-                    let lane = mask.trailing_zeros() as usize;
-                    let slot = group_start + lane;
-
-                    if self.hashtable[slot].as_ref().unwrap().0 == *key {
-                        self.hashtable[slot] = None;
-                        self.ctrl[slot] = DELETED;
-                        return;
-                    }
-                    mask &= mask - 1; // clears the lowest set bit
-                }
-
-                // Termination condition: element not found.
-                let empty_broadcast = _mm_set1_epi8(EMPTY as i8);
-                let empty_cmp = _mm_cmpeq_epi8(v, empty_broadcast); // reuse v
-                let empty_mask = _mm_movemask_epi8(empty_cmp) as u16;
-
-                if empty_mask != 0 {
-                    return;
-                }
-                group_start = (group_start + 16) as usize & (capacity - 1) as usize;
-            }
-        }
-    }
-
+    /// How should the get() algorithm work in vectorized case?
+    /// 
+    /// We iterate over elements one group at a time. Each group is 16-bytes.
+    /// That is, we look at 16 fingerprints at a time.
+    /// 
+    /// First, we round down to the nearest 16's multiple. Hashbrown doesn't do
+    /// this. But it's a simplification we have done. From there, we look at
+    /// 16 fingerprints at a time.
+    /// 
+    /// Wherever we get a fingerprint match, we do the naive match.
+    /// Once we get the EMPTY fingerprint, we terminate by saying that
+    /// key not found.
     fn get(&self, key: &K) -> Option<&V> {
-        let hash = self.make_hash(&key);
-
-        let capacity = self.ctrl.len() as u64;
-        let idx = (hash & (capacity - 1u64)) as usize;
-        let fingerprint = (hash >> 57) as u8;
-
-        let mut group_start: usize = idx & !(16 - 1);
-
-        loop {
-            unsafe {
-                let v = _mm_loadu_si128(self.ctrl.as_ptr().add(group_start) as *const __m128i);
-
-                let broadcast = _mm_set1_epi8(fingerprint as i8);
-
-                let comparison_result = _mm_cmpeq_epi8(v, broadcast);
-
-                // 16-bit bitmask with a bit set to 1, for which the comparison succeeded.
-                let selection = _mm_movemask_epi8(comparison_result) as u16;
-
-                let mut mask = selection;
-                // Loop to get all the matched bits and do naive search
-                while mask != 0 {
-                    // get the lowest set bit == one slot idx
-                    let lane = mask.trailing_zeros() as usize;
-                    let slot = group_start + lane;
-
-                    // Probable match- confirm with the real key.
-                    if self.hashtable[slot].as_ref().unwrap().0 == *key {
-                        return Some(&self.hashtable[slot].as_ref().unwrap().1);
-                    }
-                    mask &= mask - 1; // clears the lowest set bit
-                }
-                let empty_broadcast = _mm_set1_epi8(EMPTY as i8);
-                let empty_cmp = _mm_cmpeq_epi8(v, empty_broadcast); // reuse v
-                let empty_mask = _mm_movemask_epi8(empty_cmp) as u16;
-
-                if empty_mask != 0 {
-                    return None;
-                }
-                group_start = (group_start + 16) as usize & (capacity - 1) as usize;
-            }
-        }
-    }
-
-    fn insert(&mut self, key: K, value: V) {
         let hash = self.make_hash(&key);
 
         let capacity = self.ctrl.len() as u64;
@@ -218,70 +151,173 @@ where
         // That is what we want.
         let fingerprint = (hash >> 57) as u8;
 
-        // Insert the fingerprint into the control array
-        // Insert after probing the K, V into the hashtable
+        // round down to nearest 16's multiple
+        let mut group_start: usize = idx & !(16 - 1);
 
-        // Vectorized Version of the algorithm:
-        // 1. Load 16 bytes into the register from control array starting at ctrl[idx]
-        //      There needs to be a check to make sure that there are indeed 16 bytes
-        //      after the current idx. Else we may want to fall back to scalar ops.
-        // 2. Then we broadcast fingerprint and vectorized compare it.
-        //      if the comparison succeeds, we do naive comparison and replace
-        // 3. Then we need to increase the idx by 16 and again wrap it around if required.
+        loop {
+            unsafe {
+                let v = _mm_loadu_si128(self.ctrl.as_ptr().add(group_start) as *const __m128i);
+                let broadcast = _mm_set1_epi8(fingerprint as i8);
+                let comparison_result = _mm_cmpeq_epi8(v, broadcast);
+                let selection = _mm_movemask_epi8(comparison_result) as u16;
 
-        // round down the idx to a multiple of 16. Some bit manipulation trick
-        // Note that this is not what hashbrown does. It will start at the idx
-        // and ensure that it's not out of range.
-        // We just round down.
+                let mut mask = selection;
+
+                // Check for potential matches
+                while mask != 0 {
+                    let lane = mask.trailing_zeros() as usize;
+                    let slot = group_start + lane;
+                    
+                    // Do naive full matching
+                    if self.hashtable[slot].as_ref().unwrap().0 == *key {
+                        return Some(&self.hashtable[slot].as_ref().unwrap().1);
+                    }
+                    mask &= mask - 1; // clears the lowest set bit
+                }
+
+                // termination condition check
+                let empty_broadcast = _mm_set1_epi8(EMPTY as i8);
+                let empty_cmp = _mm_cmpeq_epi8(v, empty_broadcast); // reuse v
+                let empty_mask = _mm_movemask_epi8(empty_cmp) as u16;
+
+                if empty_mask != 0 {
+                    return None;
+                }
+
+                // Wrap around
+                group_start = (group_start + 16) as usize & (capacity - 1) as usize;
+            }
+        }
+    }
+
+
+    /// How do we expect the insert operation to behave?
+    /// 
+    /// We want two things:
+    ///     1. If the key is already present, then replace.
+    ///     2. If not, find a slot for it and insert the fingerprint
+    ///         and the key-value pair.
+    /// 
+    /// Checking whether the key is already present is similar to the 
+    /// get operation above. Fairly straightforward.
+    /// 
+    /// Let's say the key didn't exist and we need to find a new slot for it.
+    /// How do we find it?
+    /// It's either the first tombstone that we see OR it's the first EMPTY
+    /// slot. So we need to keep track of the first tombstone that we see.
+    /// 
+    /// Whenever we see an EMPTY slot, that's the termination condition. At
+    /// this point, we will either insert (K,V) in that EMPTY slot or if we
+    /// saw a tombstone before, we will insert it there. But the algorithm
+    /// stops when we encounter EMPTY slot.
+    fn insert(&mut self, key: K, value: V) {
+        let hash = self.make_hash(&key);
+        let capacity = self.ctrl.len() as u64;
+        let idx = (hash & (capacity - 1u64)) as usize;
+        let fingerprint = (hash >> 57) as u8;
+
         let mut group_start = idx & !(16 - 1);
 
+        // Keep track of the index of the first tombstone that we see
         let mut first_tombstone: Option<usize> = None;
 
         unsafe {
             loop {
                 let v = _mm_loadu_si128(self.ctrl.as_ptr().add(group_start) as *const __m128i);
-
                 let broadcast = _mm_set1_epi8(fingerprint as i8);
-
                 let comparison_result = _mm_cmpeq_epi8(v, broadcast);
-
-                // 16-bit bitmask with a bit set to 1, for which the comparison succeeded.
                 let selection = _mm_movemask_epi8(comparison_result) as u16;
-
                 let mut mask = selection;
-                // Loop to get all the matched bits and do naive search
+
+                // Check the potential matches to see if the key already exists.
+                // If so, replace. No need to replace the fingerprint in control
+                // array as it will be the same.
                 while mask != 0 {
-                    // get the lowest set bit == one slot idx
                     let lane = mask.trailing_zeros() as usize;
                     let slot = group_start + lane;
 
-                    // Probable match- confirm with the real key.
                     if self.hashtable[slot].as_ref().unwrap().0 == key {
                         self.hashtable[slot] = Some((key, value));
                         return;
                     }
-                    mask &= mask - 1; // clears the lowest set bit
+                    mask &= mask - 1;
                 }
 
-                let del_cmp  = _mm_cmpeq_epi8(v, _mm_set1_epi8(DELETED as i8));
+                // Check for the DELETED slot. This is to populate the first tombstone value
+                // We need to populate this only once.
+                let del_cmp = _mm_cmpeq_epi8(v, _mm_set1_epi8(DELETED as i8));
                 let del_mask = _mm_movemask_epi8(del_cmp) as u16;
                 if first_tombstone.is_none() && del_mask != 0 {
                     first_tombstone = Some(group_start + del_mask.trailing_zeros() as usize);
                 }
 
+                // Termination condition
+                let empty_broadcast = _mm_set1_epi8(EMPTY as i8);
+                let empty_cmp = _mm_cmpeq_epi8(v, empty_broadcast); 
+                let empty_mask = _mm_movemask_epi8(empty_cmp) as u16;
+
+                // Either we insert at the empty slot or at the first tombstone slot
+                if empty_mask != 0 {
+                    let slot = first_tombstone
+                        .unwrap_or(group_start + empty_mask.trailing_zeros() as usize);
+
+                    self.ctrl[slot] = fingerprint;
+                    self.hashtable[slot] = Some((key, value));
+                    return;
+                }
+                group_start = (group_start + 16) as usize & (capacity - 1) as usize;
+            }
+        }
+    }
+
+    /// How do we delete an element? What's the expected end state?
+    /// If the key existed:
+    ///     - We want to make hashtable[slot] = None.
+    ///     - And, we want to insert a ctrl[slot] = DELETED
+    /// If the key didn't exist, we don't have to do anything.
+    ///
+    /// So we first find whether the key existed or not.
+    /// We do this by doing the vector comparisons of the control array.
+    /// Once a potential match is found, we do a naive comparison.
+    /// If match is confirmed, we do the above things.
+    ///
+    /// Finding an EMPTY slot is the termination condition, which means
+    /// that the key was not found.
+    fn delete(&mut self, key: &K) {
+        let hash = self.make_hash(&key);
+        let capacity = self.ctrl.len() as u64;
+        let idx = (hash & (capacity - 1u64)) as usize;
+        let fingerprint = (hash >> 57) as u8;
+
+        let mut group_start: usize = idx & !(16 - 1);
+
+        loop {
+            unsafe {
+                // Compare the group with the fingerprint and look for a match
+                let v = _mm_loadu_si128(self.ctrl.as_ptr().add(group_start) as *const __m128i); // load
+                let broadcast = _mm_set1_epi8(fingerprint as i8); // broadcast fingerprint
+                let comparison_result = _mm_cmpeq_epi8(v, broadcast); // compare
+                let selection = _mm_movemask_epi8(comparison_result) as u16; // Convert 128-bit "lanes output" into a 16-bit number
+
+                let mut mask = selection;
+                while mask != 0 {
+                    let lane = mask.trailing_zeros() as usize;
+                    let slot = group_start + lane;
+
+                    if self.hashtable[slot].as_ref().unwrap().0 == *key {
+                        self.hashtable[slot] = None;
+                        self.ctrl[slot] = DELETED;
+                        return;
+                    }
+                    mask &= mask - 1;
+                }
+
+                // Termination condition: element not found.
                 let empty_broadcast = _mm_set1_epi8(EMPTY as i8);
                 let empty_cmp = _mm_cmpeq_epi8(v, empty_broadcast); // reuse v
                 let empty_mask = _mm_movemask_epi8(empty_cmp) as u16;
 
-                // Find the next empty slot. No need for loop here as we just want
-                // the first match
                 if empty_mask != 0 {
-                    // get the lowest set bit == empty slot
-                    let slot = first_tombstone.unwrap_or(group_start + empty_mask.trailing_zeros() as usize);
-
-                    // empty slot. insert
-                    self.ctrl[slot] = fingerprint;
-                    self.hashtable[slot] = Some((key, value));
                     return;
                 }
                 group_start = (group_start + 16) as usize & (capacity - 1) as usize;
@@ -459,7 +495,10 @@ mod tests {
             reverse.insert(format!("key{i}"), i);
         }
         for i in 0..60u64 {
-            assert_eq!(forward.get(&format!("key{i}")), reverse.get(&format!("key{i}")));
+            assert_eq!(
+                forward.get(&format!("key{i}")),
+                reverse.get(&format!("key{i}"))
+            );
         }
     }
 
@@ -684,7 +723,11 @@ mod tests {
         }
         m.insert(7, s("overwritten"));
         for i in 0..40u64 {
-            let expected = if i == 7 { s("overwritten") } else { format!("value-{i}") };
+            let expected = if i == 7 {
+                s("overwritten")
+            } else {
+                format!("value-{i}")
+            };
             assert_eq!(m.get(&i), Some(&expected));
         }
     }
