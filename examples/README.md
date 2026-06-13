@@ -12,4 +12,22 @@ Each subdirectory is a standalone experiment. It may be a Cargo project, a C fil
 
 | Directory | What it explores |
 |---|---|
+| `simd_playground/` | How the compiler auto-vectorizes, and SIMD-friendly data structures/algorithms |
 | `concurrency_playground/` | Concurrency primitives from scratch in Rust |
+
+### `simd_playground/`
+
+`NOTES.md` covers how `rustc` or LLVM auto-vectorize (loop & SLP vectorizers, inlining). Each binary in `src/bin/` is a self-contained experiment:
+
+- `bad.rs` — a prefix sum with a loop-carried dependence and other bad examples.
+- `good.rs` — a SIMD-friendly prefix sum using a shift-and-add algorithm and other good examples.
+- `swisstable.rs` — a simpler implementation of a SwissTable. The hash table is assumed to be fixed size and no resizing is there.
+
+### `concurrency_playground/`
+
+Concurrency primitives built from scratch. Each binary in `src/bin/` is a self-contained experiment:
+
+- `atomics.rs` — atomics basics.
+- `mutex.rs` — a mutex from scratch.
+- `channel.rs` — a minimal single-producer/single-consumer, single-item channel.
+- `threadpool.rs` — a threadpool built on the channel.
