@@ -44,4 +44,5 @@ This document lists all the things that **aren't** in tinyOLAP today but could b
 13. Threadpool in Query Execution
     - Even though we always execute at most one query at a time, we want to have a threadpool for the query that is being executed. 
     - Currently, the gather operator spawns four threads each time a query comes. We want to change this. We want to have a threadpool at startup and then query execution should submit tasks to this pool. 
+    - In the insert operator, we use rayon for parallel inserts. For the inserts as well, there may be some threadpool.
 

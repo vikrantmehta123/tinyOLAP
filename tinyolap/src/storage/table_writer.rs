@@ -3,20 +3,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use arrow::array::Array;
-use arrow::array::BooleanArray;
-use arrow::array::Float32Array;
-use arrow::array::Float64Array;
-use arrow::array::Int8Array;
-use arrow::array::Int16Array;
-use arrow::array::Int32Array;
-use arrow::array::Int64Array;
-use arrow::array::RecordBatch;
-use arrow::array::StringArray;
-use arrow::array::UInt8Array;
-use arrow::array::UInt16Array;
-use arrow::array::UInt32Array;
-use arrow::array::UInt64Array;
+use arrow::array::{
+    Array, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+};
+
+use arrow::compute::{SortColumn, lexsort_to_indices, take};
+
 use arrow::datatypes::DataType as ArrowDt;
 use rayon::prelude::*;
 
@@ -68,6 +61,33 @@ impl TableWriter {
             check_type(array.as_ref(), col)?;
         }
 
+        // Sort the batch based on the sort key and recast the batch
+        // In arrow, we compute first the sorted permutation and then apply
+        // that permutation to each column. There's no: batch.sort(key=some_key)
+        // We assume sort_key is always non-empty.
+        let sort_cols: Vec<SortColumn> = self
+            .schema
+            .sort_key
+            .iter()
+            .map(|&col_idx| SortColumn {
+                options: None,
+                values: batch.column(col_idx).clone(),
+            })
+            .collect();
+
+        let indices = lexsort_to_indices(&sort_cols, None)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let sorted_cols = batch
+            .columns()
+            .iter()
+            .map(|c| take(c, &indices, None))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let batch = RecordBatch::try_new(batch.schema(), sorted_cols)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
         // ---- 2. Reserve a part id and create a tmp dir. ----
         let part_id = self.next_part_id.fetch_add(1, Ordering::SeqCst);
         let tmp_dir = self.table_dir.join(format!("tmp_part_{:05}", part_id));
@@ -75,7 +95,8 @@ impl TableWriter {
         fs::create_dir_all(&tmp_dir)?;
 
         // ---- 3. Write all columns in parallel. ----
-        let result: io::Result<Vec<Option<EncodedZoneMapEntry>>> = batch.columns()
+        let result: io::Result<Vec<Option<EncodedZoneMapEntry>>> = batch
+            .columns()
             .par_iter()
             .zip(self.schema.columns.par_iter())
             .map(|(chunk, col)| write_one_column(&tmp_dir, col, chunk))
